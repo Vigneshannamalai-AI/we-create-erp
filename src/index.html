@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>We Create ERP</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<link rel="stylesheet" href="styles.css"><!--CSS-->
+</head>
+<body>
+<div id="saveWarn" hidden>This browser's storage is full or blocked, so your latest change was NOT saved. Download a backup from Settings now.</div>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+<symbol id="i-home" viewBox="0 0 24 24"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></symbol>
+<symbol id="i-file" viewBox="0 0 24 24"><path d="M6 3h9l5 5v13H6z"/><path d="M14 3v6h6M9 13h8M9 17h8"/></symbol>
+<symbol id="i-cart" viewBox="0 0 24 24"><path d="M3 4h2l2.5 11h11L21 7H6.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="17" cy="19" r="1.5"/></symbol>
+<symbol id="i-in" viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M4 21h16"/></symbol>
+<symbol id="i-out" viewBox="0 0 24 24"><path d="M12 21V9M7 14l5-5 5 5M4 3h16"/></symbol>
+<symbol id="i-book" viewBox="0 0 24 24"><path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M4 19V5"/></symbol>
+<symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.5-3.5 3.2-5.5 6.5-5.5s6 2 6.5 5.5"/><circle cx="17.5" cy="9" r="2.5"/><path d="M17 14.5c2.5 0 4.2 1.5 4.5 4"/></symbol>
+<symbol id="i-box" viewBox="0 0 24 24"><path d="M3 7l9-4 9 4v10l-9 4-9-4z"/><path d="M3 7l9 4 9-4M12 11v10"/></symbol>
+<symbol id="i-list" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></symbol>
+<symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></symbol>
+<symbol id="i-receipt" viewBox="0 0 24 24"><path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6M9 12h6"/></symbol>
+<symbol id="i-cal" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></symbol>
+<symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/></symbol>
+<symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></symbol>
+<symbol id="i-cam" viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></symbol>
+<symbol id="i-card" viewBox="0 0 24 24"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20M6 15h4"/></symbol>
+<symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+<symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></symbol>
+<symbol id="i-building" viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="18" rx="1"/><path d="M9 7h2M13 7h2M9 11h2M13 11h2M10 21v-5h4v5"/></symbol>
+<symbol id="i-bank" viewBox="0 0 24 24"><path d="M3 10l9-6 9 6M5 10v8M9 10v8M15 10v8M19 10v8M3 20h18"/></symbol>
+<symbol id="i-menu" viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/></symbol>
+<symbol id="i-dl" viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M4 21h16"/></symbol>
+<symbol id="i-print" viewBox="0 0 24 24"><path d="M6 9V3h12v6M6 18H4v-7h16v7h-2M7 14h10v7H7z"/></symbol>
+<symbol id="i-msg" viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-11.8 7L4 20l1.1-4.6A8 8 0 1 1 21 12z"/></symbol>
+<symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c1-4 4-6 8-6s7 2 8 6"/></symbol>
+<symbol id="i-swap" viewBox="0 0 24 24"><path d="M7 4L3 8l4 4M3 8h14M17 20l4-4-4-4M21 16H7"/></symbol>
+</defs></svg>
+
+<div id="auth" hidden></div>
+
+<div id="app" hidden>
+  <aside id="side">
+    <div class="brandmark"><div class="logo">WC</div><div><b>We Create ERP</b><span id="sideCo"></span></div></div>
+    <nav class="nav" id="nav"></nav>
+  </aside>
+  <div id="main">
+    <header id="top">
+      <button class="btn btn-g burger" onclick="document.body.classList.toggle('side-open')" aria-label="Menu"><svg class="i"><use href="#i-menu"/></svg></button>
+      <button class="co-btn" onclick="go('#/companies')" title="Switch company"><svg class="i"><use href="#i-building"/></svg><div><b id="topCo">—</b><small id="topGstin"></small></div></button>
+      <select id="fySel" aria-label="Financial year" onchange="setFy(this.value)"></select>
+      <div class="search"><svg class="i"><use href="#i-search"/></svg><input id="q" placeholder="Search invoices, parties, items  ( / )" autocomplete="off"><div class="search-res" id="qres"></div></div>
+      <div class="top-right">
+        <a class="btn btn-g btn-sm" href="#/billing" id="planBadge" title="Plan & billing"></a>
+        <a class="btn btn-s btn-sm adv" href="#/scan" title="Upload a bill photo"><svg class="i"><use href="#i-cam"/></svg> Scan bill</a>
+        <a class="btn btn-p btn-sm" href="#/new/SI"><svg class="i"><use href="#i-plus"/></svg> Invoice</a>
+        <div class="mode" role="group" aria-label="Basic or Advanced"><button data-m="basic" onclick="setMode('basic')">Basic</button><button data-m="advanced" onclick="setMode('advanced')">Advanced</button></div>
+        <div class="usermenu">
+          <button class="btn btn-g" onclick="event.stopPropagation();$('#umenu').classList.toggle('open')" aria-label="Account"><svg class="i"><use href="#i-user"/></svg></button>
+          <div class="pop" id="umenu">
+            <div class="who"><b id="uName"></b><small id="uRole"></small></div>
+            <a href="#/companies">Switch company</a>
+            <a href="#/settings">Settings</a>
+            <a href="#/billing">Plan & billing</a>
+            <a href="#/manual">User manual</a>
+            <button onclick="showShortcuts()">Keyboard shortcuts</button>
+            <button onclick="changePassword()">Change password</button>
+            <button onclick="newRecoveryWithPassword()">New recovery code</button>
+            <button onclick="signOut()">Sign out</button>
+          </div>
+        </div>
+      </div>
+    </header>
+    <div class="test-banner"><b>TEST BUILD</b> — data is saved only in this browser on this computer. Not for filing real returns until the server version is live. Download a backup from Settings regularly.</div>
+    <main id="view"></main>
+  </div>
+</div>
+
+<dialog id="dlg"></dialog>
+<div id="toast" role="status" aria-live="polite"></div>
+<div id="printArea"></div>
+
+<script src="js/util.js"></script>
+<script src="js/data.js"></script>
+<script src="js/gst.js"></script>
+<script src="js/plans.js"></script>
+<script src="js/manual.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/vouchers.js"></script>
+<script src="js/reports.js"></script>
+<script src="js/sample.js"></script>
+<script>boot();</script>
+</body>
+</html>
