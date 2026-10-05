@@ -148,6 +148,9 @@ function sha256(message) {
     return H.map(x => (x >>> 0).toString(16).padStart(8, '0')).join('');
 }
 
+// Shortest password allowed (owner's choice: 4). Longer passwords are always allowed.
+const MIN_PASSWORD = 4;
+
 // Password hash: salted, stretched SHA-256. (The server version will use bcrypt / Argon2.)
 function hashPassword(password, salt) {
     let h = sha256(`${salt}:${password}`);

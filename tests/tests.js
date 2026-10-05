@@ -211,6 +211,7 @@ Grand Total                                     14,632.00`;
         const locked = /Too many/.test(msgs.at(-1)); delete meta.guard.__recover;
         return (locked && meta.audit.some(a => /wrong recovery code/.test(a.action)) && verifyChain(meta.audit).ok) || msgs.join(' | ');
     });
+    check('Passwords: 4 characters accepted, 3 refused', () => { const ok4 = (() => { try { recoverWithCode('AAAA-BBBB-CCCC-DDDD', '', '1234', '1234'); } catch (e) { return !/at least/.test(e.message); } })(); const no3 = (() => { try { recoverWithCode('AAAA-BBBB-CCCC-DDDD', '', '123', '123'); } catch (e) { return /at least 4/.test(e.message); } return false; })(); delete meta.guard.__recover; return (ok4 && no3) || `${ok4} ${no3}`; });
     check('Forgot password screen renders from sign-in', () => { showForgot(); const ok = /Recovery code/.test($('#auth').innerText); $('#auth').hidden = true; return ok; });
 
     // ---------- screens ----------

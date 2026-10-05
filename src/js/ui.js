@@ -104,7 +104,7 @@ function showAuth(msg = '') {
             <div class="fg" style="grid-template-columns:1fr">
             <label class="f">Your name<input id="a_name" required></label>
             <label class="f">Username<input id="a_user" required autocomplete="username"></label>
-            <label class="f">Password <span class="hint">At least 8 characters</span><input id="a_pass" type="password" autocomplete="new-password"></label>
+            <label class="f">Password <span class="hint">At least ${MIN_PASSWORD} characters</span><input id="a_pass" type="password" autocomplete="new-password"></label>
             <label class="f">Type the password again<input id="a_pass2" type="password" autocomplete="new-password"></label>
             <label class="chk"><input type="checkbox" id="a_sample" checked> Add a sample company with a few months of entries to try it out</label></div>`
         : `<h2>Sign in</h2><p class="lead">${esc(msg) || 'Welcome back.'}</p>
@@ -126,7 +126,7 @@ function setupOwner() {
     const name = val('a_name'), user = val('a_user').toLowerCase(), pass = $('#a_pass').value;
     if (!name) E.push('Enter your name.');
     if (!/^[a-z0-9._-]{3,30}$/.test(user)) E.push('Username: 3–30 letters, digits, dot, dash or underscore.');
-    if (pass.length < 8) E.push('Password must be at least 8 characters.');
+    if (pass.length < MIN_PASSWORD) E.push(`Password must be at least ${MIN_PASSWORD} characters.`);
     if (pass !== $('#a_pass2').value) E.push('The passwords do not match.');
     if (E.length) { const e = new Error(); e.list = E; throw e; }
     const salt = randomHex(16);
@@ -204,7 +204,7 @@ function showForgot() {
         <div class="fg" style="grid-template-columns:1fr">
             <label class="f">Recovery code<input id="fg_code" placeholder="XXXX-XXXX-XXXX-XXXX" style="text-transform:uppercase;letter-spacing:.06em" autocomplete="off"></label>
             <label class="f">Username <span class="hint">Leave blank if you have forgotten it</span><input id="fg_user" autocomplete="username"></label>
-            <label class="f">New password <span class="hint">At least 8 characters</span><input id="fg_pass" type="password" autocomplete="new-password"></label>
+            <label class="f">New password <span class="hint">At least ${MIN_PASSWORD} characters</span><input id="fg_pass" type="password" autocomplete="new-password"></label>
             <label class="f">Type the new password again<input id="fg_pass2" type="password" autocomplete="new-password"></label></div>
         <div id="fgErr" style="margin-top:12px"></div>
         <button class="btn btn-p" style="width:100%;justify-content:center;margin-top:10px;padding:11px">Reset password</button>
@@ -220,7 +220,7 @@ function recoverWithCode(code, username, pass, pass2) {
     if (g.until > Date.now()) throw new Error(`Too many wrong codes. Try again in ${Math.ceil((g.until - Date.now()) / 60000)} minute(s).`);
     const E = [];
     if (normCode(code).length !== 16) E.push('The recovery code has 16 letters and digits (like K7QM-4XPN-8RTB-2WCE).');
-    if (pass.length < 8) E.push('The new password must be at least 8 characters.');
+    if (pass.length < MIN_PASSWORD) E.push(`The new password must be at least ${MIN_PASSWORD} characters.`);
     if (pass !== pass2) E.push('The two new passwords do not match.');
     if (E.length) { const e = new Error(E.join('\n')); e.list = E; throw e; }
     const user = String(username || '').trim().toLowerCase();
@@ -305,11 +305,11 @@ function applyMode() {
 async function changePassword() {
     modal({
         title: 'Change password',
-        body: `<div class="fg" style="grid-template-columns:1fr"><label class="f">Current password<input id="pw0" type="password"></label><label class="f">New password (8+ characters)<input id="pw1" type="password"></label><label class="f">Again<input id="pw2" type="password"></label></div><div id="pwErr" style="margin-top:10px"></div>`,
+        body: `<div class="fg" style="grid-template-columns:1fr"><label class="f">Current password<input id="pw0" type="password"></label><label class="f">New password (${MIN_PASSWORD}+ characters)<input id="pw1" type="password"></label><label class="f">Again<input id="pw2" type="password"></label></div><div id="pwErr" style="margin-top:10px"></div>`,
         foot: `<button class="btn btn-s" onclick="closeModal()">Cancel</button><button class="btn btn-p" id="pwOk">Change</button>`,
         onOpen: () => $('#pwOk').onclick = () => {
             if (hashPassword($('#pw0').value, me.salt) !== me.hash) return showErr('#pwErr', 'Current password is wrong.');
-            if ($('#pw1').value.length < 8 || $('#pw1').value !== $('#pw2').value) return showErr('#pwErr', 'New password must be 8+ characters and typed the same twice.');
+            if ($('#pw1').value.length < MIN_PASSWORD || $('#pw1').value !== $('#pw2').value) return showErr('#pwErr', `New password must be ${MIN_PASSWORD}+ characters and typed the same twice.`);
             me.salt = randomHex(16); me.hash = hashPassword($('#pw1').value, me.salt);
             auditMeta('Password changed', { entity: 'User', ref: me.username });
             closeModal(); toast('Password changed.');

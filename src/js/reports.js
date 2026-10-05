@@ -708,7 +708,7 @@ function userForm(id) {
         body: `<div id="usErr"></div><div class="fg" style="grid-template-columns:1fr 1fr">
             <label class="f">Name<input id="us_name" value="${esc(u.name)}"></label><label class="f">Username<input id="us_user" value="${esc(u.username)}" ${id ? 'readonly' : ''}></label>
             <label class="f">Role<select id="us_role">${Object.entries(ROLES).map(([k, l]) => opt(k, l, u.role)).join('')}</select></label>
-            <label class="f">Password ${id ? '<span class="hint">blank = unchanged</span>' : '(8+ characters)'}<input id="us_pass" type="password" autocomplete="new-password"></label>
+            <label class="f">Password ${id ? '<span class="hint">blank = unchanged</span>' : `(${MIN_PASSWORD}+ characters)`}<input id="us_pass" type="password" autocomplete="new-password"></label>
             <label class="f wide">Companies <span class="hint">Hold Ctrl / ⌘ to pick several</span><select id="us_cos" multiple size="4">${opt('all', 'All companies', u.companies === 'all' ? 'all' : '')}${meta.companies.map(c => `<option value="${c.id}" ${u.companies !== 'all' && (u.companies || []).includes(c.id) ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select></label>
             <label class="chk"><input type="checkbox" id="us_act" ${u.active !== false ? 'checked' : ''}> Active</label></div>`,
         foot: `<button class="btn btn-s" onclick="closeModal()">Cancel</button><button class="btn btn-p" id="usOk">Save</button>`,
@@ -721,7 +721,7 @@ function userForm(id) {
             if (!id && meta.users.some(x => x.username === user)) E.push('Username is taken.');
             if (!id && chk('us_act') && limitReached('users')) E.push(`Your ${PLANS[currentPlan()].name} plan allows ${planLimits().users} active user(s). Upgrade in Plan & billing.`);
             if (role === 'auditor' && !hasFeature('auditor')) E.push('The auditor role is in the Professional plan.');
-            if ((!id || pass) && pass.length < 8) E.push('Password must be at least 8 characters.');
+            if ((!id || pass) && pass.length < MIN_PASSWORD) E.push(`Password must be at least ${MIN_PASSWORD} characters.`);
             if (!cos.length) E.push('Choose at least one company.');
             if (id === me.id && (role !== 'admin' || !chk('us_act'))) E.push('You cannot remove your own admin access.');
             if (E.length) { const e = new Error(); e.list = E; return showErr('#usErr', e); }

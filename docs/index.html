@@ -461,6 +461,9 @@ function sha256(message) {
     return H.map(x => (x >>> 0).toString(16).padStart(8, '0')).join('');
 }
 
+// Shortest password allowed (owner's choice: 4). Longer passwords are always allowed.
+const MIN_PASSWORD = 4;
+
 // Password hash: salted, stretched SHA-256. (The server version will use bcrypt / Argon2.)
 function hashPassword(password, salt) {
     let h = sha256(`${salt}:${password}`);
@@ -2043,7 +2046,7 @@ function printSubInvoice(ref) {
 
 const MANUAL = [
     ['start', 'Getting started', `
-        <ol><li>Open <b>we-create-erp.html</b> in Chrome or Edge. The first time, create the <b>owner account</b> (your name, a username and a password of 8+ characters).</li>
+        <ol><li>Open <b>we-create-erp.html</b> in Chrome or Edge. The first time, create the <b>owner account</b> (your name, a username and a password of at least 4 characters).</li>
         <li>Tick <b>Add a sample company</b> to explore with 18 months of ready-made entries, or create your own company from <b>All companies → + New company</b>.</li>
         <li>Fill in the company details: trade and legal name, type of entity, <b>GSTIN</b> (state and PAN fill in from it), TAN, address, books start date and last year's turnover.</li>
         <li>Go to <b>Chart of accounts</b>, add your bank account(s) under <i>Bank Accounts</i> and enter opening balances as on the books start date. Add customers, vendors and items with their opening balances and stock.</li>
@@ -2280,7 +2283,7 @@ function showAuth(msg = '') {
             <div class="fg" style="grid-template-columns:1fr">
             <label class="f">Your name<input id="a_name" required></label>
             <label class="f">Username<input id="a_user" required autocomplete="username"></label>
-            <label class="f">Password <span class="hint">At least 8 characters</span><input id="a_pass" type="password" autocomplete="new-password"></label>
+            <label class="f">Password <span class="hint">At least ${MIN_PASSWORD} characters</span><input id="a_pass" type="password" autocomplete="new-password"></label>
             <label class="f">Type the password again<input id="a_pass2" type="password" autocomplete="new-password"></label>
             <label class="chk"><input type="checkbox" id="a_sample" checked> Add a sample company with a few months of entries to try it out</label></div>`
         : `<h2>Sign in</h2><p class="lead">${esc(msg) || 'Welcome back.'}</p>
@@ -2302,7 +2305,7 @@ function setupOwner() {
     const name = val('a_name'), user = val('a_user').toLowerCase(), pass = $('#a_pass').value;
     if (!name) E.push('Enter your name.');
     if (!/^[a-z0-9._-]{3,30}$/.test(user)) E.push('Username: 3–30 letters, digits, dot, dash or underscore.');
-    if (pass.length < 8) E.push('Password must be at least 8 characters.');
+    if (pass.length < MIN_PASSWORD) E.push(`Password must be at least ${MIN_PASSWORD} characters.`);
     if (pass !== $('#a_pass2').value) E.push('The passwords do not match.');
     if (E.length) { const e = new Error(); e.list = E; throw e; }
     const salt = randomHex(16);
@@ -2380,7 +2383,7 @@ function showForgot() {
         <div class="fg" style="grid-template-columns:1fr">
             <label class="f">Recovery code<input id="fg_code" placeholder="XXXX-XXXX-XXXX-XXXX" style="text-transform:uppercase;letter-spacing:.06em" autocomplete="off"></label>
             <label class="f">Username <span class="hint">Leave blank if you have forgotten it</span><input id="fg_user" autocomplete="username"></label>
-            <label class="f">New password <span class="hint">At least 8 characters</span><input id="fg_pass" type="password" autocomplete="new-password"></label>
+            <label class="f">New password <span class="hint">At least ${MIN_PASSWORD} characters</span><input id="fg_pass" type="password" autocomplete="new-password"></label>
             <label class="f">Type the new password again<input id="fg_pass2" type="password" autocomplete="new-password"></label></div>
         <div id="fgErr" style="margin-top:12px"></div>
         <button class="btn btn-p" style="width:100%;justify-content:center;margin-top:10px;padding:11px">Reset password</button>
@@ -2396,7 +2399,7 @@ function recoverWithCode(code, username, pass, pass2) {
     if (g.until > Date.now()) throw new Error(`Too many wrong codes. Try again in ${Math.ceil((g.until - Date.now()) / 60000)} minute(s).`);
     const E = [];
     if (normCode(code).length !== 16) E.push('The recovery code has 16 letters and digits (like K7QM-4XPN-8RTB-2WCE).');
-    if (pass.length < 8) E.push('The new password must be at least 8 characters.');
+    if (pass.length < MIN_PASSWORD) E.push(`The new password must be at least ${MIN_PASSWORD} characters.`);
     if (pass !== pass2) E.push('The two new passwords do not match.');
     if (E.length) { const e = new Error(E.join('\n')); e.list = E; throw e; }
     const user = String(username || '').trim().toLowerCase();
@@ -2481,11 +2484,11 @@ function applyMode() {
 async function changePassword() {
     modal({
         title: 'Change password',
-        body: `<div class="fg" style="grid-template-columns:1fr"><label class="f">Current password<input id="pw0" type="password"></label><label class="f">New password (8+ characters)<input id="pw1" type="password"></label><label class="f">Again<input id="pw2" type="password"></label></div><div id="pwErr" style="margin-top:10px"></div>`,
+        body: `<div class="fg" style="grid-template-columns:1fr"><label class="f">Current password<input id="pw0" type="password"></label><label class="f">New password (${MIN_PASSWORD}+ characters)<input id="pw1" type="password"></label><label class="f">Again<input id="pw2" type="password"></label></div><div id="pwErr" style="margin-top:10px"></div>`,
         foot: `<button class="btn btn-s" onclick="closeModal()">Cancel</button><button class="btn btn-p" id="pwOk">Change</button>`,
         onOpen: () => $('#pwOk').onclick = () => {
             if (hashPassword($('#pw0').value, me.salt) !== me.hash) return showErr('#pwErr', 'Current password is wrong.');
-            if ($('#pw1').value.length < 8 || $('#pw1').value !== $('#pw2').value) return showErr('#pwErr', 'New password must be 8+ characters and typed the same twice.');
+            if ($('#pw1').value.length < MIN_PASSWORD || $('#pw1').value !== $('#pw2').value) return showErr('#pwErr', `New password must be ${MIN_PASSWORD}+ characters and typed the same twice.`);
             me.salt = randomHex(16); me.hash = hashPassword($('#pw1').value, me.salt);
             auditMeta('Password changed', { entity: 'User', ref: me.username });
             closeModal(); toast('Password changed.');
@@ -4175,7 +4178,7 @@ function userForm(id) {
         body: `<div id="usErr"></div><div class="fg" style="grid-template-columns:1fr 1fr">
             <label class="f">Name<input id="us_name" value="${esc(u.name)}"></label><label class="f">Username<input id="us_user" value="${esc(u.username)}" ${id ? 'readonly' : ''}></label>
             <label class="f">Role<select id="us_role">${Object.entries(ROLES).map(([k, l]) => opt(k, l, u.role)).join('')}</select></label>
-            <label class="f">Password ${id ? '<span class="hint">blank = unchanged</span>' : '(8+ characters)'}<input id="us_pass" type="password" autocomplete="new-password"></label>
+            <label class="f">Password ${id ? '<span class="hint">blank = unchanged</span>' : `(${MIN_PASSWORD}+ characters)`}<input id="us_pass" type="password" autocomplete="new-password"></label>
             <label class="f wide">Companies <span class="hint">Hold Ctrl / ⌘ to pick several</span><select id="us_cos" multiple size="4">${opt('all', 'All companies', u.companies === 'all' ? 'all' : '')}${meta.companies.map(c => `<option value="${c.id}" ${u.companies !== 'all' && (u.companies || []).includes(c.id) ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select></label>
             <label class="chk"><input type="checkbox" id="us_act" ${u.active !== false ? 'checked' : ''}> Active</label></div>`,
         foot: `<button class="btn btn-s" onclick="closeModal()">Cancel</button><button class="btn btn-p" id="usOk">Save</button>`,
@@ -4188,7 +4191,7 @@ function userForm(id) {
             if (!id && meta.users.some(x => x.username === user)) E.push('Username is taken.');
             if (!id && chk('us_act') && limitReached('users')) E.push(`Your ${PLANS[currentPlan()].name} plan allows ${planLimits().users} active user(s). Upgrade in Plan & billing.`);
             if (role === 'auditor' && !hasFeature('auditor')) E.push('The auditor role is in the Professional plan.');
-            if ((!id || pass) && pass.length < 8) E.push('Password must be at least 8 characters.');
+            if ((!id || pass) && pass.length < MIN_PASSWORD) E.push(`Password must be at least ${MIN_PASSWORD} characters.`);
             if (!cos.length) E.push('Choose at least one company.');
             if (id === me.id && (role !== 'admin' || !chk('us_act'))) E.push('You cannot remove your own admin access.');
             if (E.length) { const e = new Error(); e.list = E; return showErr('#usErr', e); }
