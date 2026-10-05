@@ -223,3 +223,145 @@ body.basic .adv{display:none!important}
 .faq dt{font-weight:700;margin-top:8px}
 .faq dd{color:var(--ink-2);margin:2px 0 0}
 @media(max-width:900px){.manual{grid-template-columns:1fr}.manual-toc{position:static}}
+
+
+/* ===================== phones and small tablets ===================== */
+.side-mobile,#bnav,#shade,.test-banner .short{display:none}
+@media(max-width:900px){
+  html,body{overflow-x:hidden;max-width:100%}
+  #app{grid-template-columns:minmax(0,1fr)}
+  #main{min-width:0;width:100%}
+  #view{padding:14px 12px 96px;max-width:100vw}
+  /* top bar: row 1 = menu, company, new, account · row 2 = year + search */
+  #top{flex-wrap:wrap;gap:8px;padding:8px 10px}
+  .co-btn{flex:1;min-width:0;max-width:none;padding:6px 10px}
+  .co-btn b{max-width:none}
+  #fySel{order:5;flex:0 0 auto;padding:7px 8px}
+  .search{display:block!important;order:6;flex:1;max-width:none;min-width:0}
+  .search input{padding:8px 10px 8px 32px}
+  .top-right{margin-left:0;gap:4px}
+  #planBadge,.top-right .mode,.top-right a[href="#/scan"]{display:none!important}
+  .top-new .lbl{display:none}
+  .top-new{padding:8px 10px}
+  .test-banner{padding:6px 12px;font-size:12px}
+  .test-banner .full{display:none}.test-banner .short{display:inline}
+  /* side menu slides over the page */
+  #side{width:min(300px,86vw);z-index:70;padding-bottom:90px}
+  #shade{position:fixed;inset:0;background:rgba(20,22,58,.45);z-index:65}
+  body.side-open #shade{display:block}
+  .side-mobile{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 8px 10px;flex-wrap:wrap}
+  .side-mobile .mode{border-color:rgba(255,255,255,.25)}
+  .side-mobile .mode button{background:transparent;color:#c9cbe6}
+  .side-mobile .mode button.on{background:var(--brand-2);color:#fff}
+  .side-plan{font-size:11.5px;color:#c9cbe6;text-decoration:none}
+  .nav a{padding:11px 10px;font-size:15px}
+  .nav a .k{display:none}
+  /* bottom bar */
+  #bnav{display:grid;grid-template-columns:repeat(5,1fr);align-items:center;position:fixed;left:0;right:0;bottom:0;z-index:50;background:#fff;border-top:1px solid var(--line);padding:6px 4px calc(6px + env(safe-area-inset-bottom));box-shadow:0 -4px 16px rgba(20,22,58,.06)}
+  #bnav a,#bnav button{display:flex;flex-direction:column;align-items:center;gap:2px;background:none;border:none;color:var(--ink-2);font-size:11px;font-weight:600;text-decoration:none;padding:4px 0;font-family:inherit}
+  #bnav a.on{color:var(--brand)}
+  #bnav .i{width:22px;height:22px}
+  #bnav .fab{width:52px;height:52px;margin:-26px auto 0;border-radius:50%;background:linear-gradient(135deg,var(--brand),#a855f7);color:#fff;box-shadow:0 8px 20px rgba(67,56,202,.4);justify-content:center}
+  #bnav .fab .i{width:26px;height:26px}
+  /* text boxes at 16px so iPhones do not zoom when tapped */
+  input,select,textarea{font-size:16px}
+  label.f input,label.f select,label.f textarea{font-size:16px}
+  kbd{display:none}
+  .page-head{margin-bottom:12px}
+  .page-head h1{font-size:20px}
+  .page-head .row{width:100%}
+  .page-head .row .btn{flex:1 1 auto;justify-content:center}
+  .card{padding:14px;border-radius:12px}
+  .row>input,.row>select{flex:1 1 140px;min-width:0}
+  .fg{grid-template-columns:1fr}
+  .grid.g4{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+  .grid.g3,.grid.g2{grid-template-columns:minmax(0,1fr)}
+  .grid>*{min-width:0}
+  [style*="grid-column:span 2"]{grid-column:auto!important}
+  .kpi{padding:12px}
+  .kpi .v{font-size:18px}
+  .kpi .l{font-size:11.5px}
+  .kpi .s{font-size:10.5px}
+  .chart{height:220px}
+  table.t{font-size:12.5px}
+  table.t th,table.t td{padding:7px 8px}
+  table.t td{white-space:nowrap}
+  .hide-m{display:none!important}
+  .found{grid-template-columns:110px minmax(0,1fr)}
+  .found dd{word-break:break-word}
+  .totals{width:100%}
+  .tabs a,.tabs button{padding:9px 10px;font-size:13px}
+  /* voucher lines become one card per line */
+  .vform .lines thead{display:none}
+  .vform .lines,.vform .lines tbody{display:block}
+  .vform .lines tr{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;padding:12px;margin-bottom:10px;border:1px solid var(--line);border-radius:12px;background:#fbfbff;position:relative}
+  .vform .lines td{display:block;padding:0;border:none}
+  .vform .lines td[data-l]::before{content:attr(data-l);display:block;font-size:11px;font-weight:600;color:var(--ink-2);margin-bottom:3px}
+  .vform .lines td.wide{grid-column:1/-1}
+  .vform .lines td.half{grid-column:span 2}
+  .vform .lines td.calc{text-align:left;padding-top:0;font-weight:600}
+  .vform .lines td.del{position:absolute;top:4px;right:4px}
+  .vform .lines input,.vform .lines select{padding:9px 8px}
+  .form-foot{position:sticky;bottom:64px;margin:16px -12px 0;padding:10px 12px}
+  .form-foot .btn{flex:1;justify-content:center;padding:11px 8px}
+  /* dialogs fill the screen width */
+  dialog,dialog.wide{width:calc(100vw - 16px);max-height:calc(100vh - 24px)}
+  .db{padding:14px}
+  .dh,.df{padding:12px 14px}
+  .df .btn{flex:1;justify-content:center}
+  .manual-toc{display:flex;overflow-x:auto;gap:4px;padding:6px}
+  .manual-toc a{white-space:nowrap}
+  .empty{padding:24px 12px}
+  .auth-card{padding:26px 18px}
+  #toast{bottom:84px}
+}
+.status-option{display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid var(--line);border-radius:12px;color:var(--ink);background:#fff}
+.status-option:hover{border-color:var(--brand);background:var(--brand-soft)}
+.status-option .i{width:22px;height:22px;color:var(--brand)}
+
+.fg>*,label.f{min-width:0}
+select{max-width:100%}
+
+/* phone top bar: two fixed rows */
+@media(max-width:900px){
+  #top{display:grid!important;grid-template-columns:auto minmax(0,1fr) auto;grid-template-areas:"burger co right" "fy search search";gap:8px;align-items:center}
+  #top .burger{grid-area:burger}
+  #top .co-btn{grid-area:co;width:100%}
+  #top #fySel{grid-area:fy;width:auto;min-width:0}
+  #top .search{grid-area:search;width:100%}
+  #top .search input{width:100%;min-width:0}
+  #top .top-right{grid-area:right;display:flex;gap:6px}
+  #top .co-btn b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
+}
+.m-only{display:none}
+@media(max-width:900px){
+  #top .co-btn{justify-content:flex-start;text-align:left}
+  .m-only{display:inline}
+  /* voucher lists become tappable cards */
+  .m-cards{border:none;background:none;overflow:visible}
+  .m-cards table.t thead,.m-cards table.t tfoot{display:none}
+  .m-cards table.t,.m-cards table.t tbody{display:block}
+  .m-cards table.t tr{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"party total" "no status" "date due";gap:2px 10px;padding:12px 14px;margin-bottom:8px;background:#fff;border:1px solid var(--line);border-radius:12px}
+  .m-cards table.t td{display:block;padding:0;border:none;white-space:normal}
+  .m-cards table.t td.hide-m{display:none}
+  .m-cards .c-party{grid-area:party;font-weight:700;font-size:14px}
+  .m-cards .c-total{grid-area:total;font-size:15px}
+  .m-cards .c-no{grid-area:no;color:var(--ink-2);font-size:12px}
+  .m-cards .c-no b{font-weight:600}
+  .m-cards .c-status{grid-area:status;justify-self:end}
+  .m-cards .c-date{grid-area:date;color:var(--ink-3);font-size:12px}
+  .m-cards .c-due{grid-area:due;color:var(--ink-2);font-size:12px}
+  .m-cards .c-type{display:none}
+  .m-cards tr td[colspan]{grid-column:1/-1}
+}
+@media(max-width:900px){
+  #top .co-btn{justify-self:stretch;min-width:0;display:flex}
+  #top .co-btn>div{min-width:0;flex:1}
+  .card>.row>input:not([type=checkbox]):not([type=file]){flex:1 1 100%}
+}
+@media(max-width:900px){
+  input[type=file]{width:100%;max-width:100%;font-size:14px}
+  .vform .row{min-width:0}
+  .vform .row>select{min-width:0;flex:1}
+  .vform .row>div{min-width:0;max-width:100%}
+}

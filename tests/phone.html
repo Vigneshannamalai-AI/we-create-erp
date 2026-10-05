@@ -1,0 +1,11 @@
+<!doctype html><meta charset="utf-8"><title>phone</title>
+<body style="margin:0;background:#888">
+<iframe id="f" style="width:390px;height:844px;border:0;display:block;background:#fff"></iframe>
+<pre id="out"></pre>
+<script>
+const q = new URLSearchParams(location.search);
+document.getElementById('f').style.height = (q.get('h') || 844) + 'px';
+document.getElementById('f').style.width = (q.get('w') || 390) + 'px';
+document.getElementById('f').src = 'test.html?' + (q.get('q') || 'mcheck=1');
+addEventListener('message', e => { const o = document.createElement('pre'); o.id = 'results'; o.textContent = e.data; document.body.appendChild(o); });
+</script>

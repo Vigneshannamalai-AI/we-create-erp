@@ -234,6 +234,148 @@ body.basic .adv{display:none!important}
 .faq dd{color:var(--ink-2);margin:2px 0 0}
 @media(max-width:900px){.manual{grid-template-columns:1fr}.manual-toc{position:static}}
 
+
+/* ===================== phones and small tablets ===================== */
+.side-mobile,#bnav,#shade,.test-banner .short{display:none}
+@media(max-width:900px){
+  html,body{overflow-x:hidden;max-width:100%}
+  #app{grid-template-columns:minmax(0,1fr)}
+  #main{min-width:0;width:100%}
+  #view{padding:14px 12px 96px;max-width:100vw}
+  /* top bar: row 1 = menu, company, new, account · row 2 = year + search */
+  #top{flex-wrap:wrap;gap:8px;padding:8px 10px}
+  .co-btn{flex:1;min-width:0;max-width:none;padding:6px 10px}
+  .co-btn b{max-width:none}
+  #fySel{order:5;flex:0 0 auto;padding:7px 8px}
+  .search{display:block!important;order:6;flex:1;max-width:none;min-width:0}
+  .search input{padding:8px 10px 8px 32px}
+  .top-right{margin-left:0;gap:4px}
+  #planBadge,.top-right .mode,.top-right a[href="#/scan"]{display:none!important}
+  .top-new .lbl{display:none}
+  .top-new{padding:8px 10px}
+  .test-banner{padding:6px 12px;font-size:12px}
+  .test-banner .full{display:none}.test-banner .short{display:inline}
+  /* side menu slides over the page */
+  #side{width:min(300px,86vw);z-index:70;padding-bottom:90px}
+  #shade{position:fixed;inset:0;background:rgba(20,22,58,.45);z-index:65}
+  body.side-open #shade{display:block}
+  .side-mobile{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 8px 10px;flex-wrap:wrap}
+  .side-mobile .mode{border-color:rgba(255,255,255,.25)}
+  .side-mobile .mode button{background:transparent;color:#c9cbe6}
+  .side-mobile .mode button.on{background:var(--brand-2);color:#fff}
+  .side-plan{font-size:11.5px;color:#c9cbe6;text-decoration:none}
+  .nav a{padding:11px 10px;font-size:15px}
+  .nav a .k{display:none}
+  /* bottom bar */
+  #bnav{display:grid;grid-template-columns:repeat(5,1fr);align-items:center;position:fixed;left:0;right:0;bottom:0;z-index:50;background:#fff;border-top:1px solid var(--line);padding:6px 4px calc(6px + env(safe-area-inset-bottom));box-shadow:0 -4px 16px rgba(20,22,58,.06)}
+  #bnav a,#bnav button{display:flex;flex-direction:column;align-items:center;gap:2px;background:none;border:none;color:var(--ink-2);font-size:11px;font-weight:600;text-decoration:none;padding:4px 0;font-family:inherit}
+  #bnav a.on{color:var(--brand)}
+  #bnav .i{width:22px;height:22px}
+  #bnav .fab{width:52px;height:52px;margin:-26px auto 0;border-radius:50%;background:linear-gradient(135deg,var(--brand),#a855f7);color:#fff;box-shadow:0 8px 20px rgba(67,56,202,.4);justify-content:center}
+  #bnav .fab .i{width:26px;height:26px}
+  /* text boxes at 16px so iPhones do not zoom when tapped */
+  input,select,textarea{font-size:16px}
+  label.f input,label.f select,label.f textarea{font-size:16px}
+  kbd{display:none}
+  .page-head{margin-bottom:12px}
+  .page-head h1{font-size:20px}
+  .page-head .row{width:100%}
+  .page-head .row .btn{flex:1 1 auto;justify-content:center}
+  .card{padding:14px;border-radius:12px}
+  .row>input,.row>select{flex:1 1 140px;min-width:0}
+  .fg{grid-template-columns:1fr}
+  .grid.g4{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+  .grid.g3,.grid.g2{grid-template-columns:minmax(0,1fr)}
+  .grid>*{min-width:0}
+  [style*="grid-column:span 2"]{grid-column:auto!important}
+  .kpi{padding:12px}
+  .kpi .v{font-size:18px}
+  .kpi .l{font-size:11.5px}
+  .kpi .s{font-size:10.5px}
+  .chart{height:220px}
+  table.t{font-size:12.5px}
+  table.t th,table.t td{padding:7px 8px}
+  table.t td{white-space:nowrap}
+  .hide-m{display:none!important}
+  .found{grid-template-columns:110px minmax(0,1fr)}
+  .found dd{word-break:break-word}
+  .totals{width:100%}
+  .tabs a,.tabs button{padding:9px 10px;font-size:13px}
+  /* voucher lines become one card per line */
+  .vform .lines thead{display:none}
+  .vform .lines,.vform .lines tbody{display:block}
+  .vform .lines tr{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;padding:12px;margin-bottom:10px;border:1px solid var(--line);border-radius:12px;background:#fbfbff;position:relative}
+  .vform .lines td{display:block;padding:0;border:none}
+  .vform .lines td[data-l]::before{content:attr(data-l);display:block;font-size:11px;font-weight:600;color:var(--ink-2);margin-bottom:3px}
+  .vform .lines td.wide{grid-column:1/-1}
+  .vform .lines td.half{grid-column:span 2}
+  .vform .lines td.calc{text-align:left;padding-top:0;font-weight:600}
+  .vform .lines td.del{position:absolute;top:4px;right:4px}
+  .vform .lines input,.vform .lines select{padding:9px 8px}
+  .form-foot{position:sticky;bottom:64px;margin:16px -12px 0;padding:10px 12px}
+  .form-foot .btn{flex:1;justify-content:center;padding:11px 8px}
+  /* dialogs fill the screen width */
+  dialog,dialog.wide{width:calc(100vw - 16px);max-height:calc(100vh - 24px)}
+  .db{padding:14px}
+  .dh,.df{padding:12px 14px}
+  .df .btn{flex:1;justify-content:center}
+  .manual-toc{display:flex;overflow-x:auto;gap:4px;padding:6px}
+  .manual-toc a{white-space:nowrap}
+  .empty{padding:24px 12px}
+  .auth-card{padding:26px 18px}
+  #toast{bottom:84px}
+}
+.status-option{display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid var(--line);border-radius:12px;color:var(--ink);background:#fff}
+.status-option:hover{border-color:var(--brand);background:var(--brand-soft)}
+.status-option .i{width:22px;height:22px;color:var(--brand)}
+
+.fg>*,label.f{min-width:0}
+select{max-width:100%}
+
+/* phone top bar: two fixed rows */
+@media(max-width:900px){
+  #top{display:grid!important;grid-template-columns:auto minmax(0,1fr) auto;grid-template-areas:"burger co right" "fy search search";gap:8px;align-items:center}
+  #top .burger{grid-area:burger}
+  #top .co-btn{grid-area:co;width:100%}
+  #top #fySel{grid-area:fy;width:auto;min-width:0}
+  #top .search{grid-area:search;width:100%}
+  #top .search input{width:100%;min-width:0}
+  #top .top-right{grid-area:right;display:flex;gap:6px}
+  #top .co-btn b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
+}
+.m-only{display:none}
+@media(max-width:900px){
+  #top .co-btn{justify-content:flex-start;text-align:left}
+  .m-only{display:inline}
+  /* voucher lists become tappable cards */
+  .m-cards{border:none;background:none;overflow:visible}
+  .m-cards table.t thead,.m-cards table.t tfoot{display:none}
+  .m-cards table.t,.m-cards table.t tbody{display:block}
+  .m-cards table.t tr{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"party total" "no status" "date due";gap:2px 10px;padding:12px 14px;margin-bottom:8px;background:#fff;border:1px solid var(--line);border-radius:12px}
+  .m-cards table.t td{display:block;padding:0;border:none;white-space:normal}
+  .m-cards table.t td.hide-m{display:none}
+  .m-cards .c-party{grid-area:party;font-weight:700;font-size:14px}
+  .m-cards .c-total{grid-area:total;font-size:15px}
+  .m-cards .c-no{grid-area:no;color:var(--ink-2);font-size:12px}
+  .m-cards .c-no b{font-weight:600}
+  .m-cards .c-status{grid-area:status;justify-self:end}
+  .m-cards .c-date{grid-area:date;color:var(--ink-3);font-size:12px}
+  .m-cards .c-due{grid-area:due;color:var(--ink-2);font-size:12px}
+  .m-cards .c-type{display:none}
+  .m-cards tr td[colspan]{grid-column:1/-1}
+}
+@media(max-width:900px){
+  #top .co-btn{justify-self:stretch;min-width:0;display:flex}
+  #top .co-btn>div{min-width:0;flex:1}
+  .card>.row>input:not([type=checkbox]):not([type=file]){flex:1 1 100%}
+}
+@media(max-width:900px){
+  input[type=file]{width:100%;max-width:100%;font-size:14px}
+  .vform .row{min-width:0}
+  .vform .row>select{min-width:0;flex:1}
+  .vform .row>div{min-width:0;max-width:100%}
+}
+
 </style>
 </head>
 <body>
@@ -272,6 +414,10 @@ body.basic .adv{display:none!important}
 <div id="app" hidden>
   <aside id="side">
     <div class="brandmark"><div class="logo">WC</div><div><b>We Create ERP</b><span id="sideCo"></span></div></div>
+    <div class="side-mobile">
+      <div class="mode" role="group" aria-label="Basic or Advanced"><button data-m="basic" onclick="setMode('basic')">Basic</button><button data-m="advanced" onclick="setMode('advanced')">Advanced</button></div>
+      <a href="#/billing" class="side-plan" id="sidePlan"></a>
+    </div>
     <nav class="nav" id="nav"></nav>
   </aside>
   <div id="main">
@@ -283,7 +429,7 @@ body.basic .adv{display:none!important}
       <div class="top-right">
         <a class="btn btn-g btn-sm" href="#/billing" id="planBadge" title="Plan & billing"></a>
         <a class="btn btn-s btn-sm adv" href="#/scan" title="Upload a bill photo"><svg class="i"><use href="#i-cam"/></svg> Scan bill</a>
-        <a class="btn btn-p btn-sm" href="#/new/SI"><svg class="i"><use href="#i-plus"/></svg> Invoice</a>
+        <a class="btn btn-p btn-sm top-new" href="#/new/SI" aria-label="New invoice"><svg class="i"><use href="#i-plus"/></svg><span class="lbl"> Invoice</span></a>
         <div class="mode" role="group" aria-label="Basic or Advanced"><button data-m="basic" onclick="setMode('basic')">Basic</button><button data-m="advanced" onclick="setMode('advanced')">Advanced</button></div>
         <div class="usermenu">
           <button class="btn btn-g" onclick="event.stopPropagation();$('#umenu').classList.toggle('open')" aria-label="Account"><svg class="i"><use href="#i-user"/></svg></button>
@@ -301,9 +447,17 @@ body.basic .adv{display:none!important}
         </div>
       </div>
     </header>
-    <div class="test-banner"><b>TEST BUILD</b> — data is saved only in this browser on this computer. Not for filing real returns until the server version is live. Download a backup from Settings regularly.</div>
+    <div class="test-banner"><b>TEST BUILD</b><span class="full"> — data is saved only in this browser on this computer. Not for filing real returns until the server version is live. Download a backup from Settings regularly.</span><span class="short"> — data stays on this device. Back up often (Settings).</span></div>
     <main id="view"></main>
   </div>
+  <div id="shade" onclick="document.body.classList.remove('side-open')"></div>
+  <nav id="bnav" aria-label="Quick navigation">
+    <a href="#/dashboard" data-r="#/dashboard"><svg class="i"><use href="#i-home"/></svg><span>Home</span></a>
+    <a href="#/sales" data-r="#/sales"><svg class="i"><use href="#i-file"/></svg><span>Sales</span></a>
+    <button class="fab" onclick="quickAdd()" aria-label="Add new"><svg class="i"><use href="#i-plus"/></svg></button>
+    <a href="#/reports" data-r="#/report"><svg class="i"><use href="#i-chart"/></svg><span>Reports</span></a>
+    <button onclick="document.body.classList.toggle('side-open')"><svg class="i"><use href="#i-menu"/></svg><span>More</span></button>
+  </nav>
 </div>
 
 <dialog id="dlg"></dialog>
@@ -2578,6 +2732,8 @@ function renderChrome() {
     $('#nav').innerHTML = nav.map(n => n.length === 1 ? `<div class="nav-group">${n[0]}</div>`
         : `<a href="${n[0]}" class="${(h === n[0] || (n[0] !== '#/dashboard' && h.startsWith(n[0] + '/'))) ? 'on' : ''} ${n[4] || ''}">${ic(n[1])}${n[2]}${n[6] && !hasFeature(n[6]) ? '<span class="k">🔒</span>' : n[5] ? `<span class="cnt">${n[5]}</span>` : n[3] ? `<span class="k">${n[3]}</span>` : ''}</a>`).join('');
     $('#planBadge').textContent = planStatus();
+    $('#sidePlan').textContent = planStatus();
+    $$('#bnav a').forEach(a => a.classList.toggle('on', h === a.dataset.r || h.startsWith(a.dataset.r + '/') || (a.dataset.r === '#/report' && h === '#/reports')));
 }
 
 // ---------- keyboard (Tally-style) ----------
@@ -2590,6 +2746,15 @@ function onKey(e) {
     if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'Enter') && $('#vSave')) { e.preventDefault(); $('#vSave').click(); return; }
     if (e.key === '/' && !typing) { e.preventDefault(); $('#q').focus(); }
     if (e.key === 'Escape' && location.hash.startsWith('#/new') && !typing) history.back();
+}
+// Phone "+" button: everything you can add, in one tap
+function quickAdd() {
+    if (!co) return go('#/companies');
+    if (!canEdit()) return toast('Your role is read-only.');
+    const b = (href, icon, label, sub, cls = '') => `<a class="status-option ${cls}" href="${href}" onclick="closeModal()" style="text-decoration:none">${ic(icon)}<span><b>${label}</b><small style="display:block;color:var(--ink-3)">${sub}</small></span></a>`;
+    modal({
+        title: 'Add new', body: `<div style="display:grid;gap:8px">${b('#/new/SI', 'file', 'Sales invoice', 'Bill a customer')}${b('#/scan', 'cam', 'Scan a bill', 'Photo of a bill → entry', 'adv')}${b('#/new/PB', 'cart', 'Purchase bill', 'A supplier\'s bill')}${b('#/new/RC', 'in', 'Receipt', 'Money received')}${b('#/new/PY', 'out', 'Payment', 'Money paid')}${b('#/new/CN', 'swap', 'Credit / debit note', 'Returns and discounts', 'adv')}${b('#/new/JV', 'book', 'Journal', 'Adjustments', 'adv')}${b('#/new/CT', 'bank', 'Contra', 'Cash ↔ bank', 'adv')}</div>`
+    });
 }
 function showShortcuts() {
     $('#umenu').classList.remove('open');
@@ -2939,12 +3104,12 @@ function viewVoucherList(kind) {
             <select onchange="listFilter.status=this.value;route()">${opt('', 'All', listFilter.status)}${['SI', 'PB'].some(t => types.includes(t)) ? opt('open', 'Unpaid only', listFilter.status) : ''}${opt('cancelled', 'Cancelled', listFilter.status)}</select>
             <input placeholder="Filter by number, party, amount" oninput="filterRows(this,'#vlT')" style="flex:1;max-width:300px">
             <button class="btn btn-s btn-sm" onclick="tableCSV($('#vlT'),'${kind}')">${ic('dl')} CSV</button></div>
-        <div class="tw"><table class="t" id="vlT"><thead><tr><th>Date</th><th>Number</th>${types.length > 1 ? '<th>Type</th>' : ''}<th>Party / ledger</th>${kind === 'purchases' ? '<th>Supplier inv.</th>' : ''}${itemish ? '<th class="n">Taxable</th><th class="n">GST</th>' : ''}<th class="n">Total</th>${['SI', 'PB'].some(t => types.includes(t)) ? '<th class="n">Due</th>' : ''}<th>Status</th></tr></thead><tbody>
-        ${list.map(v => `<tr class="click ${v.status === 'cancelled' ? 'cancel' : ''}" onclick="go('#/v/${v.id}')"><td>${fmtDate(v.date)}</td><td><b>${esc(v.no)}</b>${v.irn ? ' <span class="badge info keep">IRN</span>' : ''}${v.attachment ? ' 📎' : ''}</td>${types.length > 1 ? `<td>${VTYPES[v.type].short}</td>` : ''}
-            <td>${esc(ledgerOf(v.partyId || v.ledgerId || v.toId)?.name || (v.type === 'JV' ? (v.narration || '').slice(0, 40) : ''))}</td>${kind === 'purchases' ? `<td>${esc(v.refNo || '')}</td>` : ''}
-            ${itemish ? `<td class="n">${num(v.totals.taxable)}</td><td class="n">${num(v.totals.tax)}${v.rcm ? ' <span class="badge warn keep">RCM</span>' : ''}</td>` : ''}<td class="n"><b>${num(v.totals.total)}</b></td>
-            ${['SI', 'PB'].some(t => types.includes(t)) ? `<td class="n">${v.status === 'cancelled' ? '—' : num(outstanding(v))}</td>` : ''}<td class="keep">${billStatus(v)}</td></tr>`).join('') || `<tr><td colspan="10" class="muted" style="text-align:center;padding:24px">Nothing here yet.${canEdit() ? ` Press <kbd>${VTYPES[types[0]].key}</kbd> to add one.` : ''}</td></tr>`}
-        </tbody>${act.length ? `<tfoot><tr><td colspan="${2 + (types.length > 1) + 1 + (kind === 'purchases')}">${act.length} active</td>${itemish ? `<td class="n">${num(sum(act, v => v.totals.taxable))}</td><td class="n">${num(sum(act, v => v.totals.tax))}</td>` : ''}<td class="n">${num(sum(act, v => v.totals.total))}</td>${['SI', 'PB'].some(t => types.includes(t)) ? `<td class="n">${num(sum(act, v => outstanding(v)))}</td>` : ''}<td></td></tr></tfoot>` : ''}</table></div></div>`;
+        <div class="tw m-cards"><table class="t" id="vlT"><thead><tr><th>Date</th><th>Number</th>${types.length > 1 ? '<th>Type</th>' : ''}<th>Party / ledger</th>${kind === 'purchases' ? '<th class="hide-m">Supplier inv.</th>' : ''}${itemish ? '<th class="n hide-m">Taxable</th><th class="n hide-m">GST</th>' : ''}<th class="n">Total</th>${['SI', 'PB'].some(t => types.includes(t)) ? '<th class="n">Due</th>' : ''}<th>Status</th></tr></thead><tbody>
+        ${list.map(v => `<tr class="click ${v.status === 'cancelled' ? 'cancel' : ''}" onclick="go('#/v/${v.id}')"><td class="c-date">${fmtDate(v.date)}</td><td class="c-no"><b>${esc(v.no)}</b>${v.irn ? ' <span class="badge info keep">IRN</span>' : ''}${v.attachment ? ' 📎' : ''}</td>${types.length > 1 ? `<td class="c-type">${VTYPES[v.type].short}</td>` : ''}
+            <td class="c-party">${esc(ledgerOf(v.partyId || v.ledgerId || v.toId)?.name || (v.type === 'JV' ? (v.narration || '').slice(0, 40) : ''))}</td>${kind === 'purchases' ? `<td class="hide-m">${esc(v.refNo || '')}</td>` : ''}
+            ${itemish ? `<td class="n hide-m">${num(v.totals.taxable)}</td><td class="n hide-m">${num(v.totals.tax)}${v.rcm ? ' <span class="badge warn keep">RCM</span>' : ''}</td>` : ''}<td class="n c-total"><b>${num(v.totals.total)}</b></td>
+            ${['SI', 'PB'].some(t => types.includes(t)) ? `<td class="n c-due">${v.status === 'cancelled' ? '—' : `<span class="m-only">Due </span>${num(outstanding(v))}`}</td>` : ''}<td class="keep c-status">${billStatus(v)}</td></tr>`).join('') || `<tr><td colspan="10" class="muted" style="text-align:center;padding:24px">Nothing here yet.${canEdit() ? ` Press <kbd>${VTYPES[types[0]].key}</kbd> to add one.` : ''}</td></tr>`}
+        </tbody>${act.length ? `<tfoot><tr><td colspan="${2 + (types.length > 1) + 1 + (kind === 'purchases')}">${act.length} active</td>${itemish ? `<td class="n hide-m">${num(sum(act, v => v.totals.taxable))}</td><td class="n hide-m">${num(sum(act, v => v.totals.tax))}</td>` : ''}<td class="n">${num(sum(act, v => v.totals.total))}</td>${['SI', 'PB'].some(t => types.includes(t)) ? `<td class="n">${num(sum(act, v => outstanding(v)))}</td>` : ''}<td></td></tr></tfoot>` : ''}</table></div></div>`;
 }
 
 // ---------- forms ----------
@@ -2964,7 +3129,7 @@ function viewVoucherForm(src) {
     if (ITEM_TYPES.includes(F.type)) { F.lines = F.lines?.length ? F.lines : [blankLine()]; if (F.itc === undefined) F.itc = true; }
     if (F.type === 'JV') F.jlines = F.jlines?.length ? F.jlines.map(l => ({ ...l })) : [{ acc: '', dr: 0, cr: 0 }, { acc: '', dr: 0, cr: 0 }];
     const T = VTYPES[F.type];
-    const head = `<div class="page-head"><div><h1>${editing ? `Edit ${esc(F.no)}` : `New ${T.name}`}</h1><p>${editing ? 'Every change is recorded in the audit trail with the old and new values.' : `Number <b>${esc(previewNumber(F.type, F.date))}</b> is given when you save (numbers never skip). Shortcut <kbd>${T.key}</kbd> · save with <kbd>Ctrl</kbd>+<kbd>S</kbd>.`}</p></div></div>`;
+    const head = `<div class="page-head"><div><h1>${editing ? `Edit ${esc(F.no)}` : `New ${T.name}`}</h1><p>${editing ? 'Every change is recorded in the audit trail with the old and new values.' : `Number <b>${esc(previewNumber(F.type, F.date))}</b> is given when you save (numbers never skip). <span class="hide-m">Shortcut <kbd>${T.key}</kbd> · save with <kbd>Ctrl</kbd>+<kbd>S</kbd>.</span>`}</p></div></div>`;
     $('#view').innerHTML = head + `<div class="vform"><div id="vErr"></div>${ITEM_TYPES.includes(F.type) ? itemFormHtml() : F.type === 'JV' ? journalFormHtml() : moneyFormHtml()}
         <div id="vWarn"></div>
         <div class="form-foot"><a class="btn btn-s" href="${editing ? `#/v/${F.id}` : 'javascript:history.back()'}">Cancel</a>${editing ? '' : '<button class="btn btn-s" id="vSaveNew">Save & new</button>'}<button class="btn btn-p" id="vSave">Save <kbd style="background:transparent;color:#fff;border-color:rgba(255,255,255,.4)">Ctrl S</kbd></button></div></div>`;
@@ -3086,17 +3251,17 @@ function drawLines() {
     const accFilter = buy ? (l => ['purchase', 'direxp', 'indexp', 'fixed', 'empexp', 'fincost', 'curassets', 'loansadv'].includes(l.group)) : (l => ['sales', 'dirinc', 'indinc'].includes(l.group));
     const itemOpts = sel => opt('', '—', sel) + co.items.map(i => opt(i.id, i.name, sel)).join('');
     $('#f_lines').innerHTML = F.lines.map((l, i) => `<tr data-i="${i}">
-        <td><select data-k="itemId">${itemOpts(l.itemId)}</select></td>
-        <td><input data-k="desc" value="${esc(l.desc)}"></td>
-        <td><input data-k="hsn" value="${esc(l.hsn)}" maxlength="8"></td>
-        <td><input data-k="qty" class="num" type="number" min="0" step="0.001" value="${l.qty}"></td>
-        <td><select data-k="unit">${UNITS.map(u => opt(u, u, l.unit)).join('')}</select></td>
-        <td><input data-k="rate" class="num" type="number" min="0" step="0.01" value="${l.rate}"></td>
-        <td><input data-k="disc" class="num" type="number" min="0" max="100" step="0.01" value="${l.disc || 0}"></td>
-        <td><select data-k="gstRate">${GST_RATES.map(r => opt(r, r + '%', l.gstRate)).join('')}</select></td>
-        <td class="adv"><select data-k="accId">${ledgerOptions(l.accId, accFilter, 'Default')}</select></td>
-        <td class="calc" data-c="taxable"></td><td class="calc" data-c="tax"></td><td class="calc" data-c="amount"></td>
-        <td><button class="btn btn-g btn-sm" type="button" title="Remove line" onclick="F.lines.splice(${i},1);if(!F.lines.length)F.lines.push(blankLine());drawLines()">×</button></td></tr>`).join('');
+        <td class="wide" data-l="Item ${i + 1}"><select data-k="itemId">${itemOpts(l.itemId)}</select></td>
+        <td class="wide" data-l="Description"><input data-k="desc" value="${esc(l.desc)}"></td>
+        <td class="half" data-l="HSN / SAC"><input data-k="hsn" value="${esc(l.hsn)}" maxlength="8" inputmode="numeric"></td>
+        <td data-l="Qty"><input data-k="qty" class="num" type="number" min="0" step="0.001" inputmode="decimal" value="${l.qty}"></td>
+        <td data-l="Unit"><select data-k="unit">${UNITS.map(u => opt(u, u, l.unit)).join('')}</select></td>
+        <td class="half" data-l="Rate (₹)"><input data-k="rate" class="num" type="number" min="0" step="0.01" inputmode="decimal" value="${l.rate}"></td>
+        <td data-l="Disc %"><input data-k="disc" class="num" type="number" min="0" max="100" step="0.01" inputmode="decimal" value="${l.disc || 0}"></td>
+        <td data-l="GST"><select data-k="gstRate">${GST_RATES.map(r => opt(r, r + '%', l.gstRate)).join('')}</select></td>
+        <td class="adv wide" data-l="Ledger"><select data-k="accId">${ledgerOptions(l.accId, accFilter, 'Default')}</select></td>
+        <td class="calc half" data-l="Taxable" data-c="taxable"></td><td class="calc" data-l="GST ₹" data-c="tax"></td><td class="calc" data-l="Amount" data-c="amount"></td>
+        <td class="del"><button class="btn btn-g btn-sm" type="button" title="Remove line" onclick="F.lines.splice(${i},1);if(!F.lines.length)F.lines.push(blankLine());drawLines()">×</button></td></tr>`).join('');
     $$('#f_lines [data-k]').forEach(el => {
         const ev = el.tagName === 'SELECT' ? 'onchange' : 'oninput';
         el[ev] = () => {
@@ -3120,7 +3285,7 @@ function drawLines() {
     refresh();
 }
 function drawJournal() {
-    $('#f_jl').innerHTML = F.jlines.map((l, i) => `<tr data-i="${i}"><td><select data-k="acc">${ledgerOptions(l.acc)}</select></td><td><input data-k="dr" class="num" type="number" min="0" step="0.01" value="${l.dr || ''}"></td><td><input data-k="cr" class="num" type="number" min="0" step="0.01" value="${l.cr || ''}"></td><td><button class="btn btn-g btn-sm" type="button" onclick="F.jlines.splice(${i},1);drawJournal()">×</button></td></tr>`).join('');
+    $('#f_jl').innerHTML = F.jlines.map((l, i) => `<tr data-i="${i}"><td class="wide" data-l="Ledger ${i + 1}"><select data-k="acc">${ledgerOptions(l.acc)}</select></td><td class="half" data-l="Debit (₹)"><input data-k="dr" class="num" type="number" min="0" step="0.01" inputmode="decimal" value="${l.dr || ''}"></td><td class="half" data-l="Credit (₹)"><input data-k="cr" class="num" type="number" min="0" step="0.01" inputmode="decimal" value="${l.cr || ''}"></td><td class="del"><button class="btn btn-g btn-sm" type="button" onclick="F.jlines.splice(${i},1);drawJournal()">×</button></td></tr>`).join('');
     $$('#f_jl [data-k]').forEach(el => { el[el.tagName === 'SELECT' ? 'onchange' : 'oninput'] = () => { const L = F.jlines[Number(el.closest('tr').dataset.i)]; L[el.dataset.k] = el.dataset.k === 'acc' ? el.value : Number(el.value) || 0; refresh(); }; });
     refresh();
 }
@@ -3265,8 +3430,8 @@ function viewVoucher(id) {
         ${v.ewb ? `<div class="warns" style="background:var(--info-soft);color:var(--info)"><b>e-Way bill${v.ewb.test ? ' (TEST)' : ''}:</b> ${esc(v.ewb.no)} · ${esc(v.ewb.vehicle)} · ${v.ewb.distance} km · valid till ${fmtDate(v.ewb.validUpto)}</div>` : ''}
         <div class="grid g3">
         <div class="card" style="grid-column:span 2">
-            ${ITEM_TYPES.includes(v.type) ? `<div class="tw"><table class="t"><thead><tr><th>#</th><th>Item / description</th><th>HSN</th><th class="n">Qty</th><th class="n">Rate</th><th class="n">Taxable</th><th class="n">GST</th><th class="n">Tax</th><th class="n">Amount</th></tr></thead><tbody>
-                ${v.lines.map((l, i) => `<tr><td>${i + 1}</td><td>${esc(l.desc || itemById(l.itemId)?.name || '')}</td><td>${esc(l.hsn)}</td><td class="n">${l.qty} ${esc(l.unit)}</td><td class="n">${num(l.rate)}</td><td class="n">${num(l.taxable)}</td><td class="n">${l.effRate ?? l.gstRate}%</td><td class="n">${num(l.cgst + l.sgst + l.igst)}</td><td class="n">${num(l.amount)}</td></tr>`).join('')}
+            ${ITEM_TYPES.includes(v.type) ? `<div class="tw"><table class="t"><thead><tr><th class="hide-m">#</th><th>Item / description</th><th class="hide-m">HSN</th><th class="n">Qty</th><th class="n hide-m">Rate</th><th class="n hide-m">Taxable</th><th class="n hide-m">GST</th><th class="n hide-m">Tax</th><th class="n">Amount</th></tr></thead><tbody>
+                ${v.lines.map((l, i) => `<tr><td class="hide-m">${i + 1}</td><td style="white-space:normal">${esc(l.desc || itemById(l.itemId)?.name || '')}</td><td class="hide-m">${esc(l.hsn)}</td><td class="n">${l.qty} ${esc(l.unit)}</td><td class="n hide-m">${num(l.rate)}</td><td class="n hide-m">${num(l.taxable)}</td><td class="n hide-m">${l.effRate ?? l.gstRate}%</td><td class="n hide-m">${num(l.cgst + l.sgst + l.igst)}</td><td class="n">${num(l.amount)}</td></tr>`).join('')}
                 </tbody></table></div>
                 <div class="totals" style="margin-top:12px"><div><span>Taxable</span><b>${num(t.taxable)}</b></div>${t.cgst ? `<div><span>CGST</span><span>${num(t.cgst)}</span></div><div><span>SGST</span><span>${num(t.sgst)}</span></div>` : ''}${t.igst ? `<div><span>IGST</span><span>${num(t.igst)}</span></div>` : ''}${t.roundOff ? `<div><span>Round off</span><span>${num(t.roundOff)}</span></div>` : ''}<div class="big"><span>Total</span><span>${inr(t.total)}</span></div>${v.tcs?.amount ? `<div><span>TCS ${esc(tcsName(v.tcs.section, true))} @ ${v.tcs.rate}%</span><span>${num(v.tcs.amount)}</span></div><div class="big"><span>Receivable</span><span>${inr(t.receivable)}</span></div>` : ''}${v.tds?.amount ? `<div><span>TDS ${esc(tdsName(v.tds.section, true))} @ ${v.tds.rate}%</span><span>−${num(v.tds.amount)}</span></div>` : ''}</div>
                 <p class="note" style="margin-top:8px">${esc({ B2B: 'B2B supply', B2C: 'B2C supply', EXP: 'Export', SEZ: 'Supply to SEZ' }[v.kind] || '')} · Place of supply ${esc(stateName(v.pos))} · ${t.inter ? 'Inter-state (IGST)' : 'Intra-state (CGST + SGST)'}${v.rcm ? ' · Reverse charge' : ''}${v.itc === false ? ' · ITC not claimed' : ''}${v.origId ? ` · Against ${esc(vById(v.origId)?.no || '')}` : ''}${v.reason ? ` · ${esc(v.reason)}` : ''}</p>`
@@ -3510,10 +3675,10 @@ function viewReport(key) {
 const prevYear = d => `${Number(d.slice(0, 4)) - 1}${d.slice(4)}`;
 function stmtRows(rows, hasPrev) {
     return rows.map(r => {
-        if (r.head) return `<tr class="head"><td colspan="${hasPrev ? 4 : 3}">${esc(r.head)}</td></tr>`;
+        if (r.head) return `<tr class="head"><td colspan="${hasPrev ? 4 : 3}" style="white-space:normal">${esc(r.head)}</td></tr>`;
         const cells = `<td class="n">${r.cur == null ? '' : num(r.cur)}</td>${hasPrev ? `<td class="n">${r.prev == null ? '' : num(r.prev)}</td>` : ''}`;
-        const main = `<tr class="${r.cls || ''}"><td class="${r.ind || ''}">${esc(r.label)}</td><td class="muted">${esc(r.note || '')}</td>${cells}</tr>`;
-        const det = reportState.detail && r.details ? r.details.map(d => `<tr><td class="ind2">${esc(d.name)}</td><td></td><td class="n muted">${num(d.cur)}</td>${hasPrev ? `<td class="n muted">${d.prev == null ? '' : num(d.prev)}</td>` : ''}</tr>`).join('') : '';
+        const main = `<tr class="${r.cls || ''}"><td class="${r.ind || ''}" style="white-space:normal">${esc(r.label)}</td><td class="muted hide-m">${esc(r.note || '')}</td>${cells}</tr>`;
+        const det = reportState.detail && r.details ? r.details.map(d => `<tr><td class="ind2" style="white-space:normal">${esc(d.name)}</td><td class="hide-m"></td><td class="n muted">${num(d.cur)}</td>${hasPrev ? `<td class="n muted">${d.prev == null ? '' : num(d.prev)}</td>` : ''}</tr>`).join('') : '';
         return main + det;
     }).join('');
 }
@@ -3527,7 +3692,7 @@ function mergeDetails(cur, prev) {
 function stmtShell(id, title, subtitle, controls, body, hasPrev, curLabel, prevLabel) {
     $('#view').innerHTML = pageHead(title, subtitle, exportBtns(id, title)) + `<div class="card"><div class="row" style="margin-bottom:14px;align-items:flex-end">${controls}</div>
         <div class="stmt-title"><b>${esc(co.profile.legalName || co.profile.name)}</b><span>${esc(title)} · ${esc(curLabel)}</span></div>
-        <div class="tw"><table class="t" id="${id}"><thead><tr><th>Particulars</th><th>Note</th><th class="n">${esc(curLabel)} (₹)</th>${hasPrev ? `<th class="n">${esc(prevLabel)} (₹)</th>` : ''}</tr></thead><tbody>${body}</tbody></table></div>
+        <div class="tw"><table class="t" id="${id}"><thead><tr><th>Particulars</th><th class="hide-m">Note</th><th class="n">${esc(curLabel)} (₹)</th>${hasPrev ? `<th class="n">${esc(prevLabel)} (₹)</th>` : ''}</tr></thead><tbody>${body}</tbody></table></div>
         <p class="note" style="margin-top:10px">Prepared under Schedule III (Division I) to the Companies Act, 2013 and the Accounting Standards notified under the Companies (Accounting Standards) Rules, 2021. For non-corporate entities the same format is used with "Owner's funds" in place of shareholders' funds.</p></div>`;
 }
 
@@ -4073,7 +4238,7 @@ function viewSettings(tab) {
             <div class="tw"><table class="t"><thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Companies</th><th>Status</th><th>Last sign-in</th><th></th></tr></thead><tbody>
             ${meta.users.map(u => `<tr><td>${esc(u.name)}${u.id === me.id ? ' <span class="badge brand">You</span>' : ''}</td><td>${esc(u.username)}</td><td>${ROLES[u.role]}</td><td>${u.companies === 'all' ? 'All' : (u.companies || []).map(id => esc(meta.companies.find(c => c.id === id)?.name || '')).join(', ')}</td><td>${u.active !== false ? '<span class="badge good">Active</span>' : '<span class="badge">Disabled</span>'}</td><td>${u.lastLogin ? new Date(u.lastLogin).toLocaleString('en-IN') : '—'}</td><td>${isAdmin() ? `<button class="link" onclick="userForm('${u.id}')">Edit</button>` : ''}</td></tr>`).join('')}
             </tbody></table></div>
-            <table class="t" style="margin-top:14px"><thead><tr><th>What each role can do</th><th>Owner / Admin</th><th>Accountant</th><th>Auditor</th></tr></thead><tbody>${[['Enter, edit and cancel vouchers', 1, 1, 0], ['Masters, GST, TDS, bank reconciliation', 1, 1, 0], ['View every report, ledger and the audit trail', 1, 1, 1], ['Raise queries on entries', 1, 1, 1], ['Company details, users, lock date, restore', 1, 0, 0]].map(([l, a, b, c]) => `<tr><td>${l}</td>${[a, b, c].map(x => `<td>${x ? '✓' : '—'}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+            <div class="tw" style="margin-top:14px"><table class="t"><thead><tr><th>What each role can do</th><th>Owner / Admin</th><th>Accountant</th><th>Auditor</th></tr></thead><tbody>${[['Enter, edit and cancel vouchers', 1, 1, 0], ['Masters, GST, TDS, bank reconciliation', 1, 1, 0], ['View every report, ledger and the audit trail', 1, 1, 1], ['Raise queries on entries', 1, 1, 1], ['Company details, users, lock date, restore', 1, 0, 0]].map(([l, a, b, c]) => `<tr><td>${l}</td>${[a, b, c].map(x => `<td>${x ? '✓' : '—'}</td>`).join('')}</tr>`).join('')}</tbody></table></div></div>`;
     } else {
         body = `<div class="card"><h2>Backup</h2><p class="note" style="margin-bottom:10px">Downloads every company, user and audit log in one file. Bill attachments are included. Keep it safe (for example in Google Drive).</p><button class="btn btn-p" onclick="exportAll()">${ic('dl')} Download full backup</button></div>
             ${isAdmin() ? `<div class="card"><h2>Restore</h2><p class="note" style="margin-bottom:10px">Replaces everything in this browser with the backup.</p><div class="row"><input type="file" id="rsFile" accept=".json"><button class="btn btn-d btn-sm" onclick="importAll()">Restore</button></div></div>

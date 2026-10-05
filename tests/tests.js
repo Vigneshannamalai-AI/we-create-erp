@@ -13,6 +13,7 @@ function runTests() {
     const shot = new URLSearchParams(location.search).get('shot');
     if (shot) return screenshotMode(shot);
     if (new URLSearchParams(location.search).get('ocr')) return ocrSelfTest();
+    if (new URLSearchParams(location.search).get('mcheck')) return mobileCheck();
     Object.keys(localStorage).filter(k => k.startsWith('wcerp.')).forEach(k => localStorage.removeItem(k));
     loadMeta();
     // ---------- utilities ----------
@@ -261,6 +262,9 @@ function screenshotMode(path) {
     createSampleCompany();
     boot();
     me = meta.users[0];
+    const filled = path === '/new/SI-filled', openMenu = path === '/menu', openAdd = path === '/add';
+    if (filled) path = '/new/SI';
+    if (path === '/menu' || path === '/add') path = '/dashboard';
     if (path === '/v/first') path = '/v/' + co.vouchers.find(v => v.type === 'SI' && v.kind === 'B2B' && v.status !== 'cancelled' && ymOf(v.date) === ymOf(todayISO())).id;
     location.hash = '#' + path;
     enterApp();
@@ -268,6 +272,9 @@ function screenshotMode(path) {
     route();
     if (path === '/forgot') { setTimeout(() => { $('#app').hidden = true; $('#auth').hidden = false; showForgot(); }, 300); return; }
     if (path === '/rcode') setTimeout(() => showRecoveryCode('K7QM-4XPN-8RTB-2WCE', 'This is your recovery code. If you forget your username or password, use it on the sign-in screen.'), 300);
+    if (filled) { setTimeout(() => { const p = co.contacts.find(c => c.name === 'Prakash Constructions'); F.partyId = p.id; $('#f_party').value = p.id; onParty(); const w = co.items.find(i => i.name.startsWith('Copper')), f = co.items.find(i => i.name.startsWith('Ceiling')); F.lines = [{ itemId: w.id, desc: w.name, hsn: w.hsn, qty: 10, unit: w.unit, rate: w.rate, disc: 0, gstRate: 18, accId: '' }, { itemId: f.id, desc: f.name, hsn: f.hsn, qty: 4, unit: f.unit, rate: f.rate, disc: 5, gstRate: 18, accId: '' }]; drawLines(); }, 300); }
+    if (openMenu) setTimeout(() => document.body.classList.add('side-open'), 600);
+    if (openAdd) setTimeout(quickAdd, 600);
     if (path === '/tds') { tdsTab = new URLSearchParams(location.search).get('tab') || 'tds'; retQ = 'Q1'; route(); }
     if (path === '/new/JV') setTimeout(() => { F.jlines = [{ acc: sysId('depreciation'), dr: 95000, cr: 0 }, { acc: co.accounts.find(a => a.name === 'Computers').id, dr: 0, cr: 60000 }, { acc: '', dr: 0, cr: 0 }]; F.narration = 'Depreciation'; drawJournal(); }, 300);
     if (path === '/scan') setTimeout(() => processText(`RAMESH AGENCIES\nNo 12, Mint Street, Chennai\nGSTIN: ${co.contacts.find(c => c.name === 'Ramesh Agencies').gstin}\nTAX INVOICE\nInvoice No: RA/2610/555   Date: 02/10/2026\nBill To: Kaveri Electricals  GSTIN ${co.profile.gstin}\nDescription  HSN  Qty  Rate  Amount\nLED Bulb 9W  853952  200  62.00  12,400.00\nTaxable Value 12,400.00\nCGST @ 9% 1,116.00\nSGST @ 9% 1,116.00\nGrand Total 14,632.00`, null), 300);
@@ -289,4 +296,27 @@ async function ocrSelfTest() {
         const p = parseInvoiceText(text);
         console.log(`OCR RESULT ${p.invoiceNo}|${p.date}|${p.taxable}|${p.tax}|${p.total}|${p.gstins.join(',')}|${p.hsn.join(',')}`); document.title = `OCR ${p.invoiceNo}|${p.date}|${p.taxable}|${p.tax}|${p.total}|${p.gstins.join(',')}|${p.hsn.join(',')}`;
     } catch (e) { console.log("OCR ERROR " + e.message); document.title = "OCR ERROR " + e.message; }
+}
+
+// test.html?mcheck=1 at a phone-sized window: every screen must fit the screen width (no sideways page scroll)
+function mobileCheck() {
+    screenshotMode('/dashboard');
+    const pages = ['#/dashboard', '#/companies', '#/sales', '#/purchases', '#/notes', '#/receipts', '#/payments', '#/journals', '#/customers', '#/vendors', '#/items', '#/accounts', '#/scan', '#/reports',
+        '#/report/pl', '#/report/bs', '#/report/cf', '#/report/tb', '#/report/daybook', '#/report/ledger', '#/report/ageing-r', '#/report/salesreg', '#/gst/r1', '#/gst/r3b', '#/gst/2b', '#/gst/ein', '#/tds', '#/bank', '#/calendar', '#/audit',
+        '#/settings/company', '#/settings/invoice', '#/settings/tax', '#/settings/users', '#/billing', '#/manual', '#/new/SI', '#/new/PB', '#/new/RC', '#/new/JV', `#/v/${co.vouchers.find(v => v.type === 'SI').id}`];
+    const bad = [];
+    pages.forEach(h => {
+        history.replaceState(null, '', h); route();
+        const w = window.innerWidth;
+        if (document.documentElement.scrollWidth > w + 1) bad.push(`${h}: page ${document.documentElement.scrollWidth}px wide on a ${w}px screen`);
+        // anything (other than inside a scrolling table box) sticking out past the right edge
+        const offenders = [...document.querySelectorAll('#app *')].filter(el => { if (el.closest('.tw') || el.closest('#side') || el.closest('.tabs') || el.closest('.manual-toc') || !el.offsetParent) return false; const r = el.getBoundingClientRect(); return r.width && r.right > w + 1; });
+        if (offenders.length) bad.push(`${h}: ${offenders.slice(0, 3).map(el => el.tagName.toLowerCase() + (el.id ? '#' + el.id : '') + (el.className && typeof el.className === 'string' ? '.' + el.className.split(' ')[0] : '')).join(', ')}`);
+    });
+    console.log('MCHECK ' + window.innerWidth + ' ' + JSON.stringify(bad.length ? bad : ['All screens fit']));
+    const widest = [...document.querySelectorAll('body *')].filter(el => el.offsetParent).map(el => [el.getBoundingClientRect().right, el.tagName + (el.id ? '#' + el.id : '') + '.' + String(el.className).split(' ')[0] + ' w=' + Math.round(el.getBoundingClientRect().width)]).sort((a, b) => b[0] - a[0]).slice(0, 6);
+    bad.push(`innerWidth ${window.innerWidth} clientWidth ${document.documentElement.clientWidth} widest: ${widest.map(x => Math.round(x[0]) + ' ' + x[1]).join(' | ')}`);
+    document.title = bad.length ? `MOBILE FAIL ${bad.length}` : `MOBILE PASS ${pages.length}`;
+    const pre = document.createElement('pre'); pre.id = 'results'; pre.textContent = bad.join('\n') || 'All screens fit';
+    document.body.appendChild(pre);
 }

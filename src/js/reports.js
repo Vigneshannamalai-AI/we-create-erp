@@ -40,10 +40,10 @@ function viewReport(key) {
 const prevYear = d => `${Number(d.slice(0, 4)) - 1}${d.slice(4)}`;
 function stmtRows(rows, hasPrev) {
     return rows.map(r => {
-        if (r.head) return `<tr class="head"><td colspan="${hasPrev ? 4 : 3}">${esc(r.head)}</td></tr>`;
+        if (r.head) return `<tr class="head"><td colspan="${hasPrev ? 4 : 3}" style="white-space:normal">${esc(r.head)}</td></tr>`;
         const cells = `<td class="n">${r.cur == null ? '' : num(r.cur)}</td>${hasPrev ? `<td class="n">${r.prev == null ? '' : num(r.prev)}</td>` : ''}`;
-        const main = `<tr class="${r.cls || ''}"><td class="${r.ind || ''}">${esc(r.label)}</td><td class="muted">${esc(r.note || '')}</td>${cells}</tr>`;
-        const det = reportState.detail && r.details ? r.details.map(d => `<tr><td class="ind2">${esc(d.name)}</td><td></td><td class="n muted">${num(d.cur)}</td>${hasPrev ? `<td class="n muted">${d.prev == null ? '' : num(d.prev)}</td>` : ''}</tr>`).join('') : '';
+        const main = `<tr class="${r.cls || ''}"><td class="${r.ind || ''}" style="white-space:normal">${esc(r.label)}</td><td class="muted hide-m">${esc(r.note || '')}</td>${cells}</tr>`;
+        const det = reportState.detail && r.details ? r.details.map(d => `<tr><td class="ind2" style="white-space:normal">${esc(d.name)}</td><td class="hide-m"></td><td class="n muted">${num(d.cur)}</td>${hasPrev ? `<td class="n muted">${d.prev == null ? '' : num(d.prev)}</td>` : ''}</tr>`).join('') : '';
         return main + det;
     }).join('');
 }
@@ -57,7 +57,7 @@ function mergeDetails(cur, prev) {
 function stmtShell(id, title, subtitle, controls, body, hasPrev, curLabel, prevLabel) {
     $('#view').innerHTML = pageHead(title, subtitle, exportBtns(id, title)) + `<div class="card"><div class="row" style="margin-bottom:14px;align-items:flex-end">${controls}</div>
         <div class="stmt-title"><b>${esc(co.profile.legalName || co.profile.name)}</b><span>${esc(title)} · ${esc(curLabel)}</span></div>
-        <div class="tw"><table class="t" id="${id}"><thead><tr><th>Particulars</th><th>Note</th><th class="n">${esc(curLabel)} (₹)</th>${hasPrev ? `<th class="n">${esc(prevLabel)} (₹)</th>` : ''}</tr></thead><tbody>${body}</tbody></table></div>
+        <div class="tw"><table class="t" id="${id}"><thead><tr><th>Particulars</th><th class="hide-m">Note</th><th class="n">${esc(curLabel)} (₹)</th>${hasPrev ? `<th class="n">${esc(prevLabel)} (₹)</th>` : ''}</tr></thead><tbody>${body}</tbody></table></div>
         <p class="note" style="margin-top:10px">Prepared under Schedule III (Division I) to the Companies Act, 2013 and the Accounting Standards notified under the Companies (Accounting Standards) Rules, 2021. For non-corporate entities the same format is used with "Owner's funds" in place of shareholders' funds.</p></div>`;
 }
 
@@ -603,7 +603,7 @@ function viewSettings(tab) {
             <div class="tw"><table class="t"><thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Companies</th><th>Status</th><th>Last sign-in</th><th></th></tr></thead><tbody>
             ${meta.users.map(u => `<tr><td>${esc(u.name)}${u.id === me.id ? ' <span class="badge brand">You</span>' : ''}</td><td>${esc(u.username)}</td><td>${ROLES[u.role]}</td><td>${u.companies === 'all' ? 'All' : (u.companies || []).map(id => esc(meta.companies.find(c => c.id === id)?.name || '')).join(', ')}</td><td>${u.active !== false ? '<span class="badge good">Active</span>' : '<span class="badge">Disabled</span>'}</td><td>${u.lastLogin ? new Date(u.lastLogin).toLocaleString('en-IN') : '—'}</td><td>${isAdmin() ? `<button class="link" onclick="userForm('${u.id}')">Edit</button>` : ''}</td></tr>`).join('')}
             </tbody></table></div>
-            <table class="t" style="margin-top:14px"><thead><tr><th>What each role can do</th><th>Owner / Admin</th><th>Accountant</th><th>Auditor</th></tr></thead><tbody>${[['Enter, edit and cancel vouchers', 1, 1, 0], ['Masters, GST, TDS, bank reconciliation', 1, 1, 0], ['View every report, ledger and the audit trail', 1, 1, 1], ['Raise queries on entries', 1, 1, 1], ['Company details, users, lock date, restore', 1, 0, 0]].map(([l, a, b, c]) => `<tr><td>${l}</td>${[a, b, c].map(x => `<td>${x ? '✓' : '—'}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+            <div class="tw" style="margin-top:14px"><table class="t"><thead><tr><th>What each role can do</th><th>Owner / Admin</th><th>Accountant</th><th>Auditor</th></tr></thead><tbody>${[['Enter, edit and cancel vouchers', 1, 1, 0], ['Masters, GST, TDS, bank reconciliation', 1, 1, 0], ['View every report, ledger and the audit trail', 1, 1, 1], ['Raise queries on entries', 1, 1, 1], ['Company details, users, lock date, restore', 1, 0, 0]].map(([l, a, b, c]) => `<tr><td>${l}</td>${[a, b, c].map(x => `<td>${x ? '✓' : '—'}</td>`).join('')}</tr>`).join('')}</tbody></table></div></div>`;
     } else {
         body = `<div class="card"><h2>Backup</h2><p class="note" style="margin-bottom:10px">Downloads every company, user and audit log in one file. Bill attachments are included. Keep it safe (for example in Google Drive).</p><button class="btn btn-p" onclick="exportAll()">${ic('dl')} Download full backup</button></div>
             ${isAdmin() ? `<div class="card"><h2>Restore</h2><p class="note" style="margin-bottom:10px">Replaces everything in this browser with the backup.</p><div class="row"><input type="file" id="rsFile" accept=".json"><button class="btn btn-d btn-sm" onclick="importAll()">Restore</button></div></div>

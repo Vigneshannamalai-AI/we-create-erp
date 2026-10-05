@@ -14,6 +14,7 @@ Source is in `src/` (`index.html`, `styles.css`, `js/*.js`). After editing:
 
     python3 build.py            # rebuilds dist/we-create-erp.html and docs/index.html (the website)
     tests/run.sh                # rebuilds and runs the automated checks in headless Chrome
+    tests/mobile.sh             # checks every screen fits a 390 px and 360 px phone
 
 ## What it does
 - Sales invoices, purchase bills, credit / debit notes, receipts, payments, journals, contra — Tally keys (F4–F9).

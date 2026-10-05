@@ -399,6 +399,8 @@ function renderChrome() {
     $('#nav').innerHTML = nav.map(n => n.length === 1 ? `<div class="nav-group">${n[0]}</div>`
         : `<a href="${n[0]}" class="${(h === n[0] || (n[0] !== '#/dashboard' && h.startsWith(n[0] + '/'))) ? 'on' : ''} ${n[4] || ''}">${ic(n[1])}${n[2]}${n[6] && !hasFeature(n[6]) ? '<span class="k">🔒</span>' : n[5] ? `<span class="cnt">${n[5]}</span>` : n[3] ? `<span class="k">${n[3]}</span>` : ''}</a>`).join('');
     $('#planBadge').textContent = planStatus();
+    $('#sidePlan').textContent = planStatus();
+    $$('#bnav a').forEach(a => a.classList.toggle('on', h === a.dataset.r || h.startsWith(a.dataset.r + '/') || (a.dataset.r === '#/report' && h === '#/reports')));
 }
 
 // ---------- keyboard (Tally-style) ----------
@@ -411,6 +413,15 @@ function onKey(e) {
     if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'Enter') && $('#vSave')) { e.preventDefault(); $('#vSave').click(); return; }
     if (e.key === '/' && !typing) { e.preventDefault(); $('#q').focus(); }
     if (e.key === 'Escape' && location.hash.startsWith('#/new') && !typing) history.back();
+}
+// Phone "+" button: everything you can add, in one tap
+function quickAdd() {
+    if (!co) return go('#/companies');
+    if (!canEdit()) return toast('Your role is read-only.');
+    const b = (href, icon, label, sub, cls = '') => `<a class="status-option ${cls}" href="${href}" onclick="closeModal()" style="text-decoration:none">${ic(icon)}<span><b>${label}</b><small style="display:block;color:var(--ink-3)">${sub}</small></span></a>`;
+    modal({
+        title: 'Add new', body: `<div style="display:grid;gap:8px">${b('#/new/SI', 'file', 'Sales invoice', 'Bill a customer')}${b('#/scan', 'cam', 'Scan a bill', 'Photo of a bill → entry', 'adv')}${b('#/new/PB', 'cart', 'Purchase bill', 'A supplier\'s bill')}${b('#/new/RC', 'in', 'Receipt', 'Money received')}${b('#/new/PY', 'out', 'Payment', 'Money paid')}${b('#/new/CN', 'swap', 'Credit / debit note', 'Returns and discounts', 'adv')}${b('#/new/JV', 'book', 'Journal', 'Adjustments', 'adv')}${b('#/new/CT', 'bank', 'Contra', 'Cash ↔ bank', 'adv')}</div>`
+    });
 }
 function showShortcuts() {
     $('#umenu').classList.remove('open');

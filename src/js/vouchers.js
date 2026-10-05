@@ -40,12 +40,12 @@ function viewVoucherList(kind) {
             <select onchange="listFilter.status=this.value;route()">${opt('', 'All', listFilter.status)}${['SI', 'PB'].some(t => types.includes(t)) ? opt('open', 'Unpaid only', listFilter.status) : ''}${opt('cancelled', 'Cancelled', listFilter.status)}</select>
             <input placeholder="Filter by number, party, amount" oninput="filterRows(this,'#vlT')" style="flex:1;max-width:300px">
             <button class="btn btn-s btn-sm" onclick="tableCSV($('#vlT'),'${kind}')">${ic('dl')} CSV</button></div>
-        <div class="tw"><table class="t" id="vlT"><thead><tr><th>Date</th><th>Number</th>${types.length > 1 ? '<th>Type</th>' : ''}<th>Party / ledger</th>${kind === 'purchases' ? '<th>Supplier inv.</th>' : ''}${itemish ? '<th class="n">Taxable</th><th class="n">GST</th>' : ''}<th class="n">Total</th>${['SI', 'PB'].some(t => types.includes(t)) ? '<th class="n">Due</th>' : ''}<th>Status</th></tr></thead><tbody>
-        ${list.map(v => `<tr class="click ${v.status === 'cancelled' ? 'cancel' : ''}" onclick="go('#/v/${v.id}')"><td>${fmtDate(v.date)}</td><td><b>${esc(v.no)}</b>${v.irn ? ' <span class="badge info keep">IRN</span>' : ''}${v.attachment ? ' 📎' : ''}</td>${types.length > 1 ? `<td>${VTYPES[v.type].short}</td>` : ''}
-            <td>${esc(ledgerOf(v.partyId || v.ledgerId || v.toId)?.name || (v.type === 'JV' ? (v.narration || '').slice(0, 40) : ''))}</td>${kind === 'purchases' ? `<td>${esc(v.refNo || '')}</td>` : ''}
-            ${itemish ? `<td class="n">${num(v.totals.taxable)}</td><td class="n">${num(v.totals.tax)}${v.rcm ? ' <span class="badge warn keep">RCM</span>' : ''}</td>` : ''}<td class="n"><b>${num(v.totals.total)}</b></td>
-            ${['SI', 'PB'].some(t => types.includes(t)) ? `<td class="n">${v.status === 'cancelled' ? '—' : num(outstanding(v))}</td>` : ''}<td class="keep">${billStatus(v)}</td></tr>`).join('') || `<tr><td colspan="10" class="muted" style="text-align:center;padding:24px">Nothing here yet.${canEdit() ? ` Press <kbd>${VTYPES[types[0]].key}</kbd> to add one.` : ''}</td></tr>`}
-        </tbody>${act.length ? `<tfoot><tr><td colspan="${2 + (types.length > 1) + 1 + (kind === 'purchases')}">${act.length} active</td>${itemish ? `<td class="n">${num(sum(act, v => v.totals.taxable))}</td><td class="n">${num(sum(act, v => v.totals.tax))}</td>` : ''}<td class="n">${num(sum(act, v => v.totals.total))}</td>${['SI', 'PB'].some(t => types.includes(t)) ? `<td class="n">${num(sum(act, v => outstanding(v)))}</td>` : ''}<td></td></tr></tfoot>` : ''}</table></div></div>`;
+        <div class="tw m-cards"><table class="t" id="vlT"><thead><tr><th>Date</th><th>Number</th>${types.length > 1 ? '<th>Type</th>' : ''}<th>Party / ledger</th>${kind === 'purchases' ? '<th class="hide-m">Supplier inv.</th>' : ''}${itemish ? '<th class="n hide-m">Taxable</th><th class="n hide-m">GST</th>' : ''}<th class="n">Total</th>${['SI', 'PB'].some(t => types.includes(t)) ? '<th class="n">Due</th>' : ''}<th>Status</th></tr></thead><tbody>
+        ${list.map(v => `<tr class="click ${v.status === 'cancelled' ? 'cancel' : ''}" onclick="go('#/v/${v.id}')"><td class="c-date">${fmtDate(v.date)}</td><td class="c-no"><b>${esc(v.no)}</b>${v.irn ? ' <span class="badge info keep">IRN</span>' : ''}${v.attachment ? ' 📎' : ''}</td>${types.length > 1 ? `<td class="c-type">${VTYPES[v.type].short}</td>` : ''}
+            <td class="c-party">${esc(ledgerOf(v.partyId || v.ledgerId || v.toId)?.name || (v.type === 'JV' ? (v.narration || '').slice(0, 40) : ''))}</td>${kind === 'purchases' ? `<td class="hide-m">${esc(v.refNo || '')}</td>` : ''}
+            ${itemish ? `<td class="n hide-m">${num(v.totals.taxable)}</td><td class="n hide-m">${num(v.totals.tax)}${v.rcm ? ' <span class="badge warn keep">RCM</span>' : ''}</td>` : ''}<td class="n c-total"><b>${num(v.totals.total)}</b></td>
+            ${['SI', 'PB'].some(t => types.includes(t)) ? `<td class="n c-due">${v.status === 'cancelled' ? '—' : `<span class="m-only">Due </span>${num(outstanding(v))}`}</td>` : ''}<td class="keep c-status">${billStatus(v)}</td></tr>`).join('') || `<tr><td colspan="10" class="muted" style="text-align:center;padding:24px">Nothing here yet.${canEdit() ? ` Press <kbd>${VTYPES[types[0]].key}</kbd> to add one.` : ''}</td></tr>`}
+        </tbody>${act.length ? `<tfoot><tr><td colspan="${2 + (types.length > 1) + 1 + (kind === 'purchases')}">${act.length} active</td>${itemish ? `<td class="n hide-m">${num(sum(act, v => v.totals.taxable))}</td><td class="n hide-m">${num(sum(act, v => v.totals.tax))}</td>` : ''}<td class="n">${num(sum(act, v => v.totals.total))}</td>${['SI', 'PB'].some(t => types.includes(t)) ? `<td class="n">${num(sum(act, v => outstanding(v)))}</td>` : ''}<td></td></tr></tfoot>` : ''}</table></div></div>`;
 }
 
 // ---------- forms ----------
@@ -65,7 +65,7 @@ function viewVoucherForm(src) {
     if (ITEM_TYPES.includes(F.type)) { F.lines = F.lines?.length ? F.lines : [blankLine()]; if (F.itc === undefined) F.itc = true; }
     if (F.type === 'JV') F.jlines = F.jlines?.length ? F.jlines.map(l => ({ ...l })) : [{ acc: '', dr: 0, cr: 0 }, { acc: '', dr: 0, cr: 0 }];
     const T = VTYPES[F.type];
-    const head = `<div class="page-head"><div><h1>${editing ? `Edit ${esc(F.no)}` : `New ${T.name}`}</h1><p>${editing ? 'Every change is recorded in the audit trail with the old and new values.' : `Number <b>${esc(previewNumber(F.type, F.date))}</b> is given when you save (numbers never skip). Shortcut <kbd>${T.key}</kbd> · save with <kbd>Ctrl</kbd>+<kbd>S</kbd>.`}</p></div></div>`;
+    const head = `<div class="page-head"><div><h1>${editing ? `Edit ${esc(F.no)}` : `New ${T.name}`}</h1><p>${editing ? 'Every change is recorded in the audit trail with the old and new values.' : `Number <b>${esc(previewNumber(F.type, F.date))}</b> is given when you save (numbers never skip). <span class="hide-m">Shortcut <kbd>${T.key}</kbd> · save with <kbd>Ctrl</kbd>+<kbd>S</kbd>.</span>`}</p></div></div>`;
     $('#view').innerHTML = head + `<div class="vform"><div id="vErr"></div>${ITEM_TYPES.includes(F.type) ? itemFormHtml() : F.type === 'JV' ? journalFormHtml() : moneyFormHtml()}
         <div id="vWarn"></div>
         <div class="form-foot"><a class="btn btn-s" href="${editing ? `#/v/${F.id}` : 'javascript:history.back()'}">Cancel</a>${editing ? '' : '<button class="btn btn-s" id="vSaveNew">Save & new</button>'}<button class="btn btn-p" id="vSave">Save <kbd style="background:transparent;color:#fff;border-color:rgba(255,255,255,.4)">Ctrl S</kbd></button></div></div>`;
@@ -187,17 +187,17 @@ function drawLines() {
     const accFilter = buy ? (l => ['purchase', 'direxp', 'indexp', 'fixed', 'empexp', 'fincost', 'curassets', 'loansadv'].includes(l.group)) : (l => ['sales', 'dirinc', 'indinc'].includes(l.group));
     const itemOpts = sel => opt('', '—', sel) + co.items.map(i => opt(i.id, i.name, sel)).join('');
     $('#f_lines').innerHTML = F.lines.map((l, i) => `<tr data-i="${i}">
-        <td><select data-k="itemId">${itemOpts(l.itemId)}</select></td>
-        <td><input data-k="desc" value="${esc(l.desc)}"></td>
-        <td><input data-k="hsn" value="${esc(l.hsn)}" maxlength="8"></td>
-        <td><input data-k="qty" class="num" type="number" min="0" step="0.001" value="${l.qty}"></td>
-        <td><select data-k="unit">${UNITS.map(u => opt(u, u, l.unit)).join('')}</select></td>
-        <td><input data-k="rate" class="num" type="number" min="0" step="0.01" value="${l.rate}"></td>
-        <td><input data-k="disc" class="num" type="number" min="0" max="100" step="0.01" value="${l.disc || 0}"></td>
-        <td><select data-k="gstRate">${GST_RATES.map(r => opt(r, r + '%', l.gstRate)).join('')}</select></td>
-        <td class="adv"><select data-k="accId">${ledgerOptions(l.accId, accFilter, 'Default')}</select></td>
-        <td class="calc" data-c="taxable"></td><td class="calc" data-c="tax"></td><td class="calc" data-c="amount"></td>
-        <td><button class="btn btn-g btn-sm" type="button" title="Remove line" onclick="F.lines.splice(${i},1);if(!F.lines.length)F.lines.push(blankLine());drawLines()">×</button></td></tr>`).join('');
+        <td class="wide" data-l="Item ${i + 1}"><select data-k="itemId">${itemOpts(l.itemId)}</select></td>
+        <td class="wide" data-l="Description"><input data-k="desc" value="${esc(l.desc)}"></td>
+        <td class="half" data-l="HSN / SAC"><input data-k="hsn" value="${esc(l.hsn)}" maxlength="8" inputmode="numeric"></td>
+        <td data-l="Qty"><input data-k="qty" class="num" type="number" min="0" step="0.001" inputmode="decimal" value="${l.qty}"></td>
+        <td data-l="Unit"><select data-k="unit">${UNITS.map(u => opt(u, u, l.unit)).join('')}</select></td>
+        <td class="half" data-l="Rate (₹)"><input data-k="rate" class="num" type="number" min="0" step="0.01" inputmode="decimal" value="${l.rate}"></td>
+        <td data-l="Disc %"><input data-k="disc" class="num" type="number" min="0" max="100" step="0.01" inputmode="decimal" value="${l.disc || 0}"></td>
+        <td data-l="GST"><select data-k="gstRate">${GST_RATES.map(r => opt(r, r + '%', l.gstRate)).join('')}</select></td>
+        <td class="adv wide" data-l="Ledger"><select data-k="accId">${ledgerOptions(l.accId, accFilter, 'Default')}</select></td>
+        <td class="calc half" data-l="Taxable" data-c="taxable"></td><td class="calc" data-l="GST ₹" data-c="tax"></td><td class="calc" data-l="Amount" data-c="amount"></td>
+        <td class="del"><button class="btn btn-g btn-sm" type="button" title="Remove line" onclick="F.lines.splice(${i},1);if(!F.lines.length)F.lines.push(blankLine());drawLines()">×</button></td></tr>`).join('');
     $$('#f_lines [data-k]').forEach(el => {
         const ev = el.tagName === 'SELECT' ? 'onchange' : 'oninput';
         el[ev] = () => {
@@ -221,7 +221,7 @@ function drawLines() {
     refresh();
 }
 function drawJournal() {
-    $('#f_jl').innerHTML = F.jlines.map((l, i) => `<tr data-i="${i}"><td><select data-k="acc">${ledgerOptions(l.acc)}</select></td><td><input data-k="dr" class="num" type="number" min="0" step="0.01" value="${l.dr || ''}"></td><td><input data-k="cr" class="num" type="number" min="0" step="0.01" value="${l.cr || ''}"></td><td><button class="btn btn-g btn-sm" type="button" onclick="F.jlines.splice(${i},1);drawJournal()">×</button></td></tr>`).join('');
+    $('#f_jl').innerHTML = F.jlines.map((l, i) => `<tr data-i="${i}"><td class="wide" data-l="Ledger ${i + 1}"><select data-k="acc">${ledgerOptions(l.acc)}</select></td><td class="half" data-l="Debit (₹)"><input data-k="dr" class="num" type="number" min="0" step="0.01" inputmode="decimal" value="${l.dr || ''}"></td><td class="half" data-l="Credit (₹)"><input data-k="cr" class="num" type="number" min="0" step="0.01" inputmode="decimal" value="${l.cr || ''}"></td><td class="del"><button class="btn btn-g btn-sm" type="button" onclick="F.jlines.splice(${i},1);drawJournal()">×</button></td></tr>`).join('');
     $$('#f_jl [data-k]').forEach(el => { el[el.tagName === 'SELECT' ? 'onchange' : 'oninput'] = () => { const L = F.jlines[Number(el.closest('tr').dataset.i)]; L[el.dataset.k] = el.dataset.k === 'acc' ? el.value : Number(el.value) || 0; refresh(); }; });
     refresh();
 }
@@ -366,8 +366,8 @@ function viewVoucher(id) {
         ${v.ewb ? `<div class="warns" style="background:var(--info-soft);color:var(--info)"><b>e-Way bill${v.ewb.test ? ' (TEST)' : ''}:</b> ${esc(v.ewb.no)} · ${esc(v.ewb.vehicle)} · ${v.ewb.distance} km · valid till ${fmtDate(v.ewb.validUpto)}</div>` : ''}
         <div class="grid g3">
         <div class="card" style="grid-column:span 2">
-            ${ITEM_TYPES.includes(v.type) ? `<div class="tw"><table class="t"><thead><tr><th>#</th><th>Item / description</th><th>HSN</th><th class="n">Qty</th><th class="n">Rate</th><th class="n">Taxable</th><th class="n">GST</th><th class="n">Tax</th><th class="n">Amount</th></tr></thead><tbody>
-                ${v.lines.map((l, i) => `<tr><td>${i + 1}</td><td>${esc(l.desc || itemById(l.itemId)?.name || '')}</td><td>${esc(l.hsn)}</td><td class="n">${l.qty} ${esc(l.unit)}</td><td class="n">${num(l.rate)}</td><td class="n">${num(l.taxable)}</td><td class="n">${l.effRate ?? l.gstRate}%</td><td class="n">${num(l.cgst + l.sgst + l.igst)}</td><td class="n">${num(l.amount)}</td></tr>`).join('')}
+            ${ITEM_TYPES.includes(v.type) ? `<div class="tw"><table class="t"><thead><tr><th class="hide-m">#</th><th>Item / description</th><th class="hide-m">HSN</th><th class="n">Qty</th><th class="n hide-m">Rate</th><th class="n hide-m">Taxable</th><th class="n hide-m">GST</th><th class="n hide-m">Tax</th><th class="n">Amount</th></tr></thead><tbody>
+                ${v.lines.map((l, i) => `<tr><td class="hide-m">${i + 1}</td><td style="white-space:normal">${esc(l.desc || itemById(l.itemId)?.name || '')}</td><td class="hide-m">${esc(l.hsn)}</td><td class="n">${l.qty} ${esc(l.unit)}</td><td class="n hide-m">${num(l.rate)}</td><td class="n hide-m">${num(l.taxable)}</td><td class="n hide-m">${l.effRate ?? l.gstRate}%</td><td class="n hide-m">${num(l.cgst + l.sgst + l.igst)}</td><td class="n">${num(l.amount)}</td></tr>`).join('')}
                 </tbody></table></div>
                 <div class="totals" style="margin-top:12px"><div><span>Taxable</span><b>${num(t.taxable)}</b></div>${t.cgst ? `<div><span>CGST</span><span>${num(t.cgst)}</span></div><div><span>SGST</span><span>${num(t.sgst)}</span></div>` : ''}${t.igst ? `<div><span>IGST</span><span>${num(t.igst)}</span></div>` : ''}${t.roundOff ? `<div><span>Round off</span><span>${num(t.roundOff)}</span></div>` : ''}<div class="big"><span>Total</span><span>${inr(t.total)}</span></div>${v.tcs?.amount ? `<div><span>TCS ${esc(tcsName(v.tcs.section, true))} @ ${v.tcs.rate}%</span><span>${num(v.tcs.amount)}</span></div><div class="big"><span>Receivable</span><span>${inr(t.receivable)}</span></div>` : ''}${v.tds?.amount ? `<div><span>TDS ${esc(tdsName(v.tds.section, true))} @ ${v.tds.rate}%</span><span>−${num(v.tds.amount)}</span></div>` : ''}</div>
                 <p class="note" style="margin-top:8px">${esc({ B2B: 'B2B supply', B2C: 'B2C supply', EXP: 'Export', SEZ: 'Supply to SEZ' }[v.kind] || '')} · Place of supply ${esc(stateName(v.pos))} · ${t.inter ? 'Inter-state (IGST)' : 'Intra-state (CGST + SGST)'}${v.rcm ? ' · Reverse charge' : ''}${v.itc === false ? ' · ITC not claimed' : ''}${v.origId ? ` · Against ${esc(vById(v.origId)?.no || '')}` : ''}${v.reason ? ` · ${esc(v.reason)}` : ''}</p>`

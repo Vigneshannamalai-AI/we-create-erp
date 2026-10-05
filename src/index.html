@@ -45,6 +45,10 @@
 <div id="app" hidden>
   <aside id="side">
     <div class="brandmark"><div class="logo">WC</div><div><b>We Create ERP</b><span id="sideCo"></span></div></div>
+    <div class="side-mobile">
+      <div class="mode" role="group" aria-label="Basic or Advanced"><button data-m="basic" onclick="setMode('basic')">Basic</button><button data-m="advanced" onclick="setMode('advanced')">Advanced</button></div>
+      <a href="#/billing" class="side-plan" id="sidePlan"></a>
+    </div>
     <nav class="nav" id="nav"></nav>
   </aside>
   <div id="main">
@@ -56,7 +60,7 @@
       <div class="top-right">
         <a class="btn btn-g btn-sm" href="#/billing" id="planBadge" title="Plan & billing"></a>
         <a class="btn btn-s btn-sm adv" href="#/scan" title="Upload a bill photo"><svg class="i"><use href="#i-cam"/></svg> Scan bill</a>
-        <a class="btn btn-p btn-sm" href="#/new/SI"><svg class="i"><use href="#i-plus"/></svg> Invoice</a>
+        <a class="btn btn-p btn-sm top-new" href="#/new/SI" aria-label="New invoice"><svg class="i"><use href="#i-plus"/></svg><span class="lbl"> Invoice</span></a>
         <div class="mode" role="group" aria-label="Basic or Advanced"><button data-m="basic" onclick="setMode('basic')">Basic</button><button data-m="advanced" onclick="setMode('advanced')">Advanced</button></div>
         <div class="usermenu">
           <button class="btn btn-g" onclick="event.stopPropagation();$('#umenu').classList.toggle('open')" aria-label="Account"><svg class="i"><use href="#i-user"/></svg></button>
@@ -74,9 +78,17 @@
         </div>
       </div>
     </header>
-    <div class="test-banner"><b>TEST BUILD</b> — data is saved only in this browser on this computer. Not for filing real returns until the server version is live. Download a backup from Settings regularly.</div>
+    <div class="test-banner"><b>TEST BUILD</b><span class="full"> — data is saved only in this browser on this computer. Not for filing real returns until the server version is live. Download a backup from Settings regularly.</span><span class="short"> — data stays on this device. Back up often (Settings).</span></div>
     <main id="view"></main>
   </div>
+  <div id="shade" onclick="document.body.classList.remove('side-open')"></div>
+  <nav id="bnav" aria-label="Quick navigation">
+    <a href="#/dashboard" data-r="#/dashboard"><svg class="i"><use href="#i-home"/></svg><span>Home</span></a>
+    <a href="#/sales" data-r="#/sales"><svg class="i"><use href="#i-file"/></svg><span>Sales</span></a>
+    <button class="fab" onclick="quickAdd()" aria-label="Add new"><svg class="i"><use href="#i-plus"/></svg></button>
+    <a href="#/reports" data-r="#/report"><svg class="i"><use href="#i-chart"/></svg><span>Reports</span></a>
+    <button onclick="document.body.classList.toggle('side-open')"><svg class="i"><use href="#i-menu"/></svg><span>More</span></button>
+  </nav>
 </div>
 
 <dialog id="dlg"></dialog>
