@@ -78,8 +78,9 @@ const drcr = n => Math.abs(n) < 0.005 ? '—' : `${num(Math.abs(n))} ${n > 0 ? '
 const pageHead = (title, desc, actions = '') => `<div class="page-head"><div><h1>${esc(title)}</h1>${desc ? `<p>${desc}</p>` : ''}</div><div class="row">${actions}</div></div>`;
 
 // ---------- boot & auth ----------
-function boot() {
+async function boot() {
     loadMeta();
+    await store.init();
     try { state.mode = localStorage.getItem('wcerp.mode') || 'advanced'; } catch (e) { /* ignore */ }
     window.addEventListener('hashchange', route);
     document.addEventListener('keydown', onKey);
@@ -282,7 +283,7 @@ function enterApp() {
     applyMode();
     const allowed = userCompanies();
     const pick = allowed.find(c => c.id === meta.lastCompany) || allowed[0];
-    if (pick && openCompany(pick.id)) { state.fy = defaultFy(); if (!location.hash || location.hash === '#/companies') location.hash = '#/dashboard'; }
+    if (pick && openCompany(pick.id)) { state.fy = defaultFy(); setTimeout(autoSync, 50); if (!location.hash || location.hash === '#/companies') location.hash = '#/dashboard'; }
     else location.hash = '#/companies';
     route();
 }
@@ -322,7 +323,7 @@ const ROUTES = [
     [/^#\/companies$/, () => viewCompanies(), true],
     [/^#\/dashboard$/, () => viewDashboard()],
     [/^#\/(sales|purchases|notes|receipts|payments|journals)$/, m => viewVoucherList(m[1])],
-    [/^#\/new\/(SI|PB|CN|DN|RC|PY|JV|CT)$/, m => viewVoucherForm({ type: m[1] })],
+    [/^#\/new\/(SI|PB|CN|DN|RC|PY|JV|CT|SJ)$/, m => viewVoucherForm({ type: m[1] })],
     [/^#\/edit\/(.+)$/, m => viewVoucherForm(vById(m[1]))],
     [/^#\/v\/(.+)$/, m => viewVoucher(m[1])],
     [/^#\/(customers|vendors)$/, m => viewContacts(m[1])],
@@ -338,6 +339,8 @@ const ROUTES = [
     [/^#\/audit$/, () => viewAudit()],
     [/^#\/settings(?:\/(\w+))?$/, m => viewSettings(m[1] || 'company')],
     [/^#\/billing$/, () => viewBilling(), true],
+    [/^#\/payroll$/, () => viewPayroll()],
+    [/^#\/connect$/, () => viewConnect()],
     [/^#\/manual$/, () => viewManual(), true]
 ];
 function route() {
@@ -373,7 +376,7 @@ function renderChrome() {
         ['Transactions'],
         ['#/sales', 'file', 'Sales', 'F8'],
         ['#/purchases', 'cart', 'Purchases', 'F9'],
-        ['#/scan', 'cam', 'Scan a bill', '', 'adv'],
+        ['#/scan', 'cam', 'Scan bills'],
         ['#/receipts', 'in', 'Receipts', 'F6'],
         ['#/payments', 'out', 'Payments', 'F5'],
         ['#/notes', 'swap', 'Credit / Debit notes', '', 'adv'],
@@ -383,6 +386,8 @@ function renderChrome() {
         ['#/vendors', 'users', 'Vendors'],
         ['#/items', 'box', 'Items & services'],
         ['#/accounts', 'list', 'Chart of accounts'],
+        ['#/payroll', 'users', 'Payroll'],
+        ['#/connect', 'swap', 'Connected dashboards'],
         ['Compliance'],
         ['#/gst', 'receipt', 'GST', '', '', items.filter(i => /e-invoice|2B|e-way/.test(i.text)).length],
         ['#/tds', 'receipt', 'TDS', '', 'adv'],
@@ -420,7 +425,7 @@ function quickAdd() {
     if (!canEdit()) return toast('Your role is read-only.');
     const b = (href, icon, label, sub, cls = '') => `<a class="status-option ${cls}" href="${href}" onclick="closeModal()" style="text-decoration:none">${ic(icon)}<span><b>${label}</b><small style="display:block;color:var(--ink-3)">${sub}</small></span></a>`;
     modal({
-        title: 'Add new', body: `<div style="display:grid;gap:8px">${b('#/new/SI', 'file', 'Sales invoice', 'Bill a customer')}${b('#/scan', 'cam', 'Scan a bill', 'Photo of a bill → entry', 'adv')}${b('#/new/PB', 'cart', 'Purchase bill', 'A supplier\'s bill')}${b('#/new/RC', 'in', 'Receipt', 'Money received')}${b('#/new/PY', 'out', 'Payment', 'Money paid')}${b('#/new/CN', 'swap', 'Credit / debit note', 'Returns and discounts', 'adv')}${b('#/new/JV', 'book', 'Journal', 'Adjustments', 'adv')}${b('#/new/CT', 'bank', 'Contra', 'Cash ↔ bank', 'adv')}</div>`
+        title: 'Add new', body: `<div style="display:grid;gap:8px">${b('#/new/SI', 'file', 'Sales invoice', 'Bill a customer')}${b('#/scan', 'cam', 'Scan bills', 'Photos of bills → posted entries')}${b('#/new/PB', 'cart', 'Purchase bill', 'A supplier\'s bill')}${b('#/new/RC', 'in', 'Receipt', 'Money received')}${b('#/new/PY', 'out', 'Payment', 'Money paid')}${b('#/new/CN', 'swap', 'Credit / debit note', 'Returns and discounts', 'adv')}${b('#/new/JV', 'book', 'Journal', 'Adjustments', 'adv')}${b('#/new/CT', 'bank', 'Contra', 'Cash ↔ bank', 'adv')}</div>`
     });
 }
 function showShortcuts() {
@@ -487,7 +492,7 @@ function viewCompanies() {
         + (cards ? `<div class="grid g3">${cards}</div>` : `<div class="empty">No companies yet. ${isAdmin() ? 'Create your first company to begin.' : 'Ask the owner to give you access.'}</div>`);
 }
 function pickCompany(id) {
-    if (openCompany(id)) { state.fy = defaultFy(); audit('Company opened', { entity: 'Company', ref: co.profile.name }); saveCo(); go('#/dashboard'); }
+    if (openCompany(id)) { state.fy = defaultFy(); audit('Company opened', { entity: 'Company', ref: co.profile.name }); saveCo(); autoSync(); go('#/dashboard'); }
 }
 function companyForm(existing) {
     const p = existing ? co.profile : { entity: 'Proprietorship', state: '33', booksFrom: `${fyOf(todayISO())}-04-01`, lut: true, roundOff: true, aato: 0 };
@@ -671,6 +676,7 @@ function itemForm(id, after) {
         title: id ? `Edit ${i.name}` : 'New item or service', wide: true,
         body: `<div id="itErr"></div><div class="fg">
             <label class="f">Type<select id="it_type">${opt('goods', 'Goods', i.type)}${opt('service', 'Service', i.type)}</select></label>
+            <label class="f">Stock type <span class="hint">Manufacturers: raw material / finished goods</span><select id="it_kind">${opt('trading', 'Trading goods', i.kind || 'trading')}${opt('raw', 'Raw material', i.kind)}${opt('finished', 'Finished goods (we make it)', i.kind)}</select></label>
             <label class="f">Name *<input id="it_name" value="${esc(i.name)}"></label>
             <label class="f">HSN / SAC * <span class="hint">4–8 digits; services start with 99</span><input id="it_hsn" maxlength="8" value="${esc(i.hsn)}"></label>
             <label class="f">GST rate<select id="it_rate">${GST_RATES.map(r => opt(r, `${r}%`, i.gstRate)).join('')}</select></label>
@@ -685,7 +691,7 @@ function itemForm(id, after) {
         </div><p class="note" style="margin-top:10px">GST 2.0 (from 22 Sep 2025): main rates are 5%, 18% and 40%. Most former 12% items are now 5%, most former 28% items 18%.</p>`,
         foot: `<button class="btn btn-s" onclick="closeModal()">Cancel</button><button class="btn btn-p" id="itOk">Save</button>`,
         onOpen: () => $('#itOk').onclick = () => {
-            const data = { ...i, id: id || undefined, type: val('it_type'), name: val('it_name'), hsn: val('it_hsn'), gstRate: Number(val('it_rate')), unit: val('it_unit'), rate: numv('it_sr'), purchaseRate: numv('it_pr'), salesAcc: val('it_sacc'), purchaseAcc: val('it_pacc'), trackStock: chk('it_track'), openQty: numv('it_oq'), openValue: numv('it_ov') };
+            const data = { ...i, id: id || undefined, type: val('it_type'), kind: val('it_kind'), name: val('it_name'), hsn: val('it_hsn'), gstRate: Number(val('it_rate')), unit: val('it_unit'), rate: numv('it_sr'), purchaseRate: numv('it_pr'), salesAcc: val('it_sacc'), purchaseAcc: val('it_pacc'), trackStock: chk('it_track'), openQty: numv('it_oq'), openValue: numv('it_ov') };
             try { const s = saveItem(data); closeModal(); toast(`${s.name} saved.`); after ? after(s) : route(); } catch (err) { showErr('#itErr', err); }
         }
     });

@@ -9,7 +9,7 @@ function check(name, fn) {
 const near = (a, b, tol = 0.02) => Math.abs(a - b) <= tol;
 const throws = (fn, re) => { try { fn(); } catch (e) { if (!re || re.test(e.message)) return true; throw new Error('Wrong error: ' + e.message); } throw new Error('Expected an error'); };
 
-function runTests() {
+async function runTests() {
     const shot = new URLSearchParams(location.search).get('shot');
     if (shot) return screenshotMode(shot);
     if (new URLSearchParams(location.search).get('ocr')) return ocrSelfTest();
@@ -215,13 +215,143 @@ Grand Total                                     14,632.00`;
     check('Passwords: 4 characters accepted, 3 refused', () => { const ok4 = (() => { try { recoverWithCode('AAAA-BBBB-CCCC-DDDD', '', '1234', '1234'); } catch (e) { return !/at least/.test(e.message); } })(); const no3 = (() => { try { recoverWithCode('AAAA-BBBB-CCCC-DDDD', '', '123', '123'); } catch (e) { return /at least 4/.test(e.message); } return false; })(); delete meta.guard.__recover; return (ok4 && no3) || `${ok4} ${no3}`; });
     check('Forgot password screen renders from sign-in', () => { showForgot(); const ok = /Recovery code/.test($('#auth').innerText); $('#auth').hidden = true; return ok; });
 
+    // ---------- payroll (sample company) ----------
+    check('Payroll: monthly runs posted and paid; salary ledger = gross', () => {
+        const runs = Object.entries(co.payroll).filter(([, r]) => r.status === 'paid');
+        const gross = sum(runs, ([, r]) => runTotals(r).gross);
+        const fyFrom = co.profile.booksFrom;
+        return (runs.length >= 12 && near(balance(sysId('salary'), todayISO()) - 0, gross) && near(balance(sysId('salPay')), 0)) || `${runs.length} runs, ledger ${balance(sysId('salary'))} vs ${gross}, salPay ${balance(sysId('salPay'))}`;
+    });
+    check('Payroll journal balances and splits PF / ESI / PT / TDS', () => {
+        const [ym, r] = Object.entries(co.payroll).find(([, r]) => r.status === 'paid' && runTotals(r).pt);
+        const P = postingsOf(vById(r.jvId)), T = runTotals(r);
+        const cr = k => sum(P.filter(p => p.acc === sysId(k)), 'cr');
+        return (near(sum(P, 'dr'), sum(P, 'cr')) && near(cr('pfPay'), T.pf + T.erPf) && near(cr('esiPay'), T.esi + T.erEsi) && near(cr('ptPay'), T.pt) && near(cr('tdsSalPay'), T.tds) && near(cr('salPay'), T.net)) || ym;
+    });
+    check('Payroll: PF 12% of basic, ESI only up to ₹21,000, TN professional tax in September', () => {
+        const r = computePayRow({ salary: 20000, pf: true, esi: true, basicPct: 50 }, '2026-09', 0);
+        const hi = computePayRow({ salary: 30000, pf: true, esi: true, basicPct: 50 }, '2026-09', 0);
+        const lo = computePayRow({ salary: 3000, pf: false, esi: false }, '2026-09', 0);   // ₹18,000 a half-year: below the TN slab
+        return (r.pf === 1200 && r.esi === 150 && r.pt === 1250 && hi.esi === 0 && hi.pt === 1250 && lo.pt === 0 && computePayRow({ salary: 30000 }, '2026-08').pt === 0) || JSON.stringify([r, hi, lo]);
+    });
+    check('Payroll: loss of pay days reduce gross pro rata', () => computePayRow({ salary: 31000, pf: false, esi: false }, '2026-07', 3).gross === 28000);
+    check('Employee benefits expense in the P&L includes employer PF / ESI', () => { const p = plData(fyStart(fy - 1), fyEnd(fy - 1)); return p.employee.some(x => x.l.id === sysId('erPf')) && p.tot(p.employee) > 900000; });
+
+    // ---------- GSTR-2B drives the credit claimed ----------
+    const m2b = addMonths(ymOf(today), -1);
+    const billsM = activeIn(['PB'], m2b).filter(v => !v.rcm && v.totals.tax && isRegistered(contactById(v.partyId)));
+    const heldBack = billsM[0];
+    check('GSTR-2B: credit of a bill not in 2B is held back and carried', () => {
+        const rows = billsM.slice(1).map(v => [contactById(v.partyId).gstin, contactById(v.partyId).name, v.refNo, ddmmyyyy(v.date), v.totals.taxable, v.totals.igst, v.totals.cgst, v.totals.sgst]);
+        import2b(toCSV([['GSTIN of supplier', 'Trade name', 'Invoice number', 'Invoice date', 'Taxable value', 'IGST', 'CGST', 'SGST'], ...rows]), m2b);
+        const g = gstr3b(m2b);
+        const claim = sum(billsM.slice(1), v => v.totals.tax);
+        const held = heldBack.totals.tax;
+        const pend = itcPending(m2b);
+        return (g.basis === '2B' && near(g.itcOther.iamt + g.itcOther.camt + g.itcOther.samt, claim) && near(g.deferred.iamt + g.deferred.camt + g.deferred.samt, held) && near(pend.iamt + pend.camt + pend.samt, held)) || JSON.stringify({ basis: g.basis, got: g.itcOther, claim, def: g.deferred, held, pend });
+    });
+    check('GSTR-2B: a late-filed bill is claimed in the month it appears', () => {
+        const nx = ymOf(today);
+        const ct = contactById(heldBack.partyId);
+        import2b(toCSV([['GSTIN of supplier', 'Trade name', 'Invoice number', 'Invoice date', 'Taxable value', 'IGST', 'CGST', 'SGST'], [ct.gstin, ct.name, heldBack.refNo, ddmmyyyy(heldBack.date), heldBack.totals.taxable, heldBack.totals.igst, heldBack.totals.cgst, heldBack.totals.sgst]]), nx);
+        const r = recon2b(nx).find(x => x.status === 'Earlier bill, now in 2B');
+        const pend = itcPending(nx), P = pend.iamt + pend.camt + pend.samt;
+        const notIn2b = sum(activeIn(['PB'], nx).filter(v => !v.rcm && v.itc !== false && v.totals.tax && isRegistered(contactById(v.partyId))), v => v.totals.tax);
+        return (r && r.v.id === heldBack.id && near(P, notIn2b, 1)) || JSON.stringify({ pend, notIn2b });
+    });
+    check('GST advisor gives this month\'s steps', () => { const a = gstAdvice(m2b); return a.some(x => /GSTR-3B/.test(x.text)) || a.map(x => x.text).join(' | '); });
+    check('GSTR-3B JSON in the GSTN format', () => { const j = gstr3bJson(m2b); return (j.ret_period === m2b.slice(5) + m2b.slice(0, 4) && j.sup_details.osup_det.txval > 0 && j.itc_elg.itc_avl.length === 5) || JSON.stringify(j.sup_details); });
+    check('GSTR-9: turnover = sales − credit notes; tax payable = paid through credit + cash', () => {
+        const g = gstr9(fy - 1);
+        const V = co.vouchers.filter(v => v.status !== 'cancelled' && fyOf(v.date) === fy - 1);
+        const turn = sum(V.filter(v => v.type === 'SI'), v => v.totals.taxable) - sum(V.filter(v => v.type === 'CN'), v => v.totals.taxable);   // reverse-charge purchases excluded
+        const P = g.pay, tot = x => x.iamt + x.camt + x.samt;
+        return (near(g.turnover, turn, 1) && near(tot(P.payable), tot(P.itc) + tot(P.cash), 1) && g.hsn.length > 3) || JSON.stringify({ t: g.turnover, turn, P });
+    });
+    check('GSTR-9 CSV for the offline tool', () => /4N/.test(gstr9Csv(fy - 1)) && /HSN/.test(gstr9Csv(fy - 1)));
+
+    // ---------- scanned bills post themselves ----------
+    const ram = co.contacts.find(c => c.name === 'Ramesh Agencies');
+    window.__scanText = `RAMESH AGENCIES\nGSTIN: ${ram.gstin}\nTAX INVOICE\nInvoice No: RA/AUTO/77   Date: ${ddmmyyyy(today, '/')}\nBill To: Kaveri Electricals  GSTIN ${co.profile.gstin}\nLED Bulb 9W  HSN 853952  100  62.00  6,200.00\nTaxable Value 6,200.00\nCGST @ 9% 558.00\nSGST @ 9% 558.00\nGrand Total 7,316.00`;
+
+    // ---------- STAY BAY: payroll only ----------
+    const home = co;
+    const fresh = (name, extra = {}) => { const c = newCompanyData({ name, state: '33', booksFrom: `${fy}-04-01`, ...extra }); co = c; meta.companies.push({ id: c.id, name }); co.links = {}; return c; };
+    const m1 = `${fy}-04`, m2 = `${fy}-05`;
+    const sbSnap = (gross, lop, basic, pf, esi, tds, adv, er) => ({ gross, lop, earnedGross: gross - lop, earnedBasic: basic, pf, esi, pt: 0, tds, advance: adv, loan: 0, net: gross - lop - pf - esi - tds - adv, employerPf: pf, employerEsi: er });
+    const SB = { employees: [
+        { id: 'sb1', code: 'SBY001', name: 'Ravi Kumar', department: 'Front Office', designation: 'Manager', salary: 30000, doj: '2020-01-01', status: 'Active', pan: 'ABCPR1234K', epf: '100200300400', salaryConfig: { pfEnabled: true, esiEnabled: true, basicPct: 50 }, payments: { [m1]: { paidOn: `${m2}-01`, snapshot: sbSnap(30000, 1000, 14500, 1740, 0, 500, 1000, 0) }, [m2]: { paidOn: `${fy}-06-01`, snapshot: sbSnap(30000, 0, 15000, 1800, 0, 500, 0, 0) } } },
+        { id: 'sb2', code: 'SBY002', name: 'Selvi R', department: 'Housekeeping', designation: 'Room Attendant', salary: 15000, doj: '2022-01-01', status: 'Active', salaryConfig: {}, payments: { [m1]: { paidOn: `${m2}-01`, snapshot: sbSnap(15000, 0, 7500, 900, 113, 0, 0, 488) } } }
+    ], employer: {}, from: 'test' };
+    let sbRep;
+    check('STAY BAY sync: employees and paid months posted to the books', () => {
+        fresh('STAY BAY test');
+        saveAccount({ name: 'HDFC Bank', group: 'bank', openDr: 500000, openCr: 0 });
+        sysAcc('capital').openCr = 500000;
+        sbRep = syncStayBay(SB);
+        const gross = 29000 + 30000 + 15000;
+        return (co.employees.length === 2 && Object.keys(co.payroll).length === 2 && near(balance(sysId('salary')), gross) && near(balance(sysId('salPay')), 0) && near(-balance(sysId('pfPay')), 1740 * 2 + 1800 * 2 + 900 * 2) && near(-balance(sysId('tdsSalPay')), 1000) && near(balance(sysId('salAdv')), -1000)) || `${reportText(sbRep)} · salary ${balance(sysId('salary'))} · ${sbRep.failed.join(' | ')}`;
+    });
+    check('STAY BAY sync again adds nothing; balance sheet tallies', () => { const n = co.vouchers.length; const r = syncStayBay(SB); const b = bsData(today); return (co.vouchers.length === n && r.skipped === 2 && near(b.totalEL, b.totalA)) || `${co.vouchers.length - n} new · ${reportText(r)} · BS ${b.totalEL} vs ${b.totalA}`; });
+
+    // ---------- Eco Pack: sales, purchases, production, repairs, payroll ----------
+    const EP = { db: {
+        sample: true, company: { name: 'Eco Pack Private Limited', gstin: makeGstin('33', 'AAACE1734G'), stateCode: '33', address: 'Arcot Road, Porur, Chennai' },
+        units: [{ id: 'porur', short: 'Porur' }], machines: [{ id: 'bf2', name: 'Blown Film Extruder 2' }],
+        products: [{ id: 'garb', name: 'Garbage Bag (Black)', unit: 'kg', wt: 1, rate: 128, hsn: '3923', recipe: { hdpe: .6, rec: .4 } }],
+        materials: [{ id: 'hdpe', name: 'HDPE Granules', rate: 100 }, { id: 'rec', name: 'Reprocessed Granules', rate: 60 }],
+        customers: [{ id: 'c1', name: 'Sri Lakshmi Traders', city: 'Chennai', state: 'Tamil Nadu', creditDays: 30 }, { id: 'c2', name: 'Deccan Electronics', city: 'Bengaluru', state: 'Karnataka', creditDays: 45 }],
+        moves: [{ date: `${m1}-01`, type: 'rm', item: 'hdpe', qty: 1000, rate: 100, kind: 'Opening' }, { date: `${m1}-01`, type: 'rm', item: 'rec', qty: 500, rate: 60, kind: 'Opening' }, { date: `${m1}-01`, type: 'fg', item: 'garb', qty: 200, rate: 128, kind: 'Opening' },
+            { date: `${m1}-05`, type: 'rm', item: 'hdpe', qty: 2000, rate: 102, kind: 'Purchase', party: 'Polymer distributor, Ambattur', bill: 'PB-0405-HDPE' }, { date: `${m1}-06`, type: 'rm', item: 'rec', qty: 1000, rate: 62, kind: 'Purchase', party: 'Reprocessed granules supplier, Padi', bill: 'PB-0406-REC' }],
+        production: [{ date: `${m1}-10`, productId: 'garb', qty: 1500, scrap: 30 }, { date: `${m1}-20`, productId: 'garb', qty: 1000, scrap: 20 }],
+        orders: [{ id: 'o1', no: 'SO-1', date: `${m1}-12`, customerId: 'c1', productId: 'garb', qty: 1000, rate: 130, status: 'Dispatched', dispatch: { date: `${m1}-14`, invoiceNo: `EP/${fyLabel(fy)}/0001`, vehicle: 'TN 01 AB 1234' }, payments: [{ date: `${m1}-25`, amount: Math.round(1000 * 130 * 1.18), mode: 'NEFT' }] },
+            { id: 'o2', no: 'SO-2', date: `${m2}-01`, customerId: 'c2', productId: 'garb', qty: 800, rate: 140, status: 'Dispatched', dispatch: { date: `${m2}-03`, invoiceNo: `EP/${fyLabel(fy)}/0002` }, payments: [] },
+            { id: 'o3', no: 'SO-3', date: `${m2}-04`, customerId: 'c1', productId: 'garb', qty: 100, rate: 130, status: 'Pending', payments: [] }],
+        maintenance: [{ id: 'mt1', machineId: 'bf2', date: `${m1}-15`, type: 'Breakdown', issue: 'Heater band failure', cost: 4500, status: 'Closed' }],
+        employees: [{ id: 'e1', code: 'EP001', unit: 'porur', name: 'Murugan S', dept: 'Extrusion', desig: 'Extrusion Operator', salary: 19500, pf: true, esi: true, doj: '2015-01-01', status: 'Active' }],
+        pay: { [m1]: { e1: { paidOn: `${m2}-02`, snap: { gross: 19500, basic: 9750, pf: 1170, esi: 147, pt: 0, net: 18183, erPf: 1170, erEsi: 634 } } } }
+    }, from: 'test' };
+    let epRep;
+    check('Eco Pack sync: invoices (own numbers), receipts, production, repairs, payroll; purchases wait for GSTINs', () => {
+        fresh('Eco Pack test', { entity: 'Private Ltd', aato: 60000000 });
+        saveAccount({ name: 'IOB Current A/c', group: 'bank', openDr: 1000000, openCr: 0 });
+        sysAcc('capital').openCr = 1000000;
+        epRep = syncEcoPack(EP);
+        const inv = co.vouchers.filter(v => v.type === 'SI');
+        const A = epRep.added;
+        return (inv.length === 2 && inv[0].no === `EP/${fyLabel(fy)}/0001` && inv[1].totals.igst > 0 && A.receipts === 1 && A['production entries'] === 2 && A['repair payments'] === 1 && A['payroll months'] === 1 && !A['purchase bills'] && epRep.needs.length === 2) || `${reportText(epRep)} · needs ${epRep.needs.length} · ${epRep.failed.join(' | ')}`;
+    });
+    check('Eco Pack: supplier GSTINs added → purchase bills come in, nothing duplicated', () => {
+        const n = co.vouchers.filter(v => v.type === 'SI').length;
+        co.links.ecopack.vendorGstin = { 'Polymer distributor, Ambattur': makeGstin('33', 'AAAFP4100K'), 'Reprocessed granules supplier, Padi': makeGstin('33', 'AAAFR4107K') };
+        const r = syncEcoPack(EP);
+        const bills = co.vouchers.filter(v => v.type === 'PB');
+        return (bills.length === 2 && bills.every(b => b.totals.tax > 0) && co.vouchers.filter(v => v.type === 'SI').length === n && r.added['purchase bills'] === 2) || reportText(r);
+    });
+    check('Eco Pack: production moves material cost into finished goods (stock quantities right)', () => {
+        const st = stockAt(today).items;
+        const it = n => co.items.find(i => i.name.startsWith(n));
+        const fg = st[it('Garbage').id], hd = st[it('HDPE').id], re = st[it('Reprocessed').id];
+        return (near(fg.qty, 200 + 2500 - 1000 - 800, 0.01) && near(hd.qty, 1000 + 2000 - 2550 * 0.6, 0.01) && near(re.qty, 500 + 1000 - 2550 * 0.4, 0.01) && near(fg.avg, 89.02, 0.05)) || JSON.stringify({ fg, hd, re });
+    });
+    check('Eco Pack: P&L shows cost of materials consumed; balance sheet tallies; cash flow ties', () => {
+        const p = plData(`${fy}-04-01`, today), b = bsData(today), c = cashFlowData(`${fy}-04-01`, today);
+        return (p.mfg && p.materials > 0 && near(b.totalEL, b.totalA) && near(c.check, 0)) || JSON.stringify({ mfg: p.mfg, mat: p.materials, el: b.totalEL, a: b.totalA, cf: c.check });
+    });
+    check('Eco Pack invoices appear in GSTR-1 with 6-digit HSN', () => { const g = gstr1(m1); return (g.summary.invoices === 1 && g.hsnB2C[0]?.hsn === '392321') || JSON.stringify(g.summary); });
+    check('Every voucher in the linked companies balances; audit chains intact', () => {
+        const bad = co.vouchers.filter(v => !near(sum(postingsOf(v), 'dr'), sum(postingsOf(v), 'cr')));
+        return (!bad.length && verifyChain(co.audit).ok) || bad.map(v => v.no).join(',');
+    });
+    co = home; ver++;
+
     // ---------- screens ----------
     enterApp();
     const pages = ['#/dashboard', '#/companies', '#/sales', '#/purchases', '#/notes', '#/receipts', '#/payments', '#/journals', '#/customers', '#/vendors', '#/items', '#/accounts', '#/scan', '#/reports',
         '#/report/pl', '#/report/bs', '#/report/cf', '#/report/tb', '#/report/daybook', '#/report/ledger', '#/report/stock', '#/report/ageing-r', '#/report/ageing-p', '#/report/msme', '#/report/salesreg', '#/report/purchreg', '#/report/hsn',
         '#/gst/r1', '#/gst/r3b', '#/gst/2b', '#/gst/ein', '#/gst/health', '#/tds', '#/bank', '#/calendar', '#/audit', '#/settings/company', '#/settings/numbering', '#/settings/users', '#/settings/backup',
         '#/new/SI', '#/new/PB', '#/new/CN', '#/new/DN', '#/new/RC', '#/new/PY', '#/new/JV', '#/new/CT',
-        '#/manual', '#/billing', '#/settings/invoice', '#/settings/tax', '#/settings/prefs', '#/settings/reminders', '#/settings/import'];
+        '#/manual', '#/billing', '#/payroll', '#/connect', '#/gst/plan', '#/gst/gstr9', '#/new/SJ', '#/settings/invoice', '#/settings/tax', '#/settings/prefs', '#/settings/reminders', '#/settings/import'];
     const sampleV = ['SI', 'PB', 'CN', 'DN', 'RC', 'PY', 'JV', 'CT'].map(t => co.vouchers.find(v => v.type === t)).filter(Boolean);
     pages.push(...sampleV.map(v => `#/v/${v.id}`));
     const failed = [];
@@ -241,6 +371,18 @@ Grand Total                                     14,632.00`;
     check('Manual search finds TDS returns', () => { manualQ = 'Form 140'; viewManual(); const r = $$('#view .man').length >= 1 && /Form 140/.test($('#view').innerText); manualQ = ''; return r; });
     check('Auditor role is read-only', () => { const saved = me; me = { ...me, role: 'auditor' }; let ok = false; try { saveVoucher({ type: 'JV', date: today, narration: 'x', jlines: [] }); } catch (e) { ok = /read-only/.test(e.message); } me = saved; return ok; });
     check('Data survives a reload (saved to storage)', () => { const id = co.id, n = co.vouchers.length; const again = loadCo(id); return again.vouchers.length === n && verifyChain(again.audit).ok; });
+
+    // ---------- scan automation (async) ----------
+    await (async () => {
+        try {
+            const r = await autoPostBill(window.__scanText, null);
+            results.push({ name: 'Scan: a clean bill is posted automatically with GST and TDS rules', ok: r.status === 'posted' && r.v.type === 'PB' && r.v.totals.total === 7316 && r.v.refNo === 'RA/AUTO/77', note: r.status === 'posted' ? r.v.no : r.reason });
+            const bad = await autoPostBill('some unreadable text 123', null);
+            results.push({ name: 'Scan: an unclear bill waits for checking', ok: bad.status === 'review', note: bad.reason });
+            const dup = await autoPostBill(window.__scanText, null);
+            results.push({ name: 'Scan: the same bill scanned twice is not posted twice', ok: dup.status === 'review' && /already entered/.test(dup.reason), note: dup.reason });
+        } catch (e) { results.push({ name: 'Scan automation', ok: false, note: e.message }); }
+    })();
 
     // ---------- report ----------
     const pass = results.filter(r => r.ok).length;

@@ -41,6 +41,17 @@ Source is in `src/` (`index.html`, `styles.css`, `js/*.js`). After editing:
 - Plans (Starter / Standard / Professional / Enterprise, prices are placeholders in src/js/plans.js), a 14-day
   trial, feature locks, usage limits and an upgrade / payment screen (test mode). Books, statements, audit
   trail and backups are never locked.
+- Scanned bills post themselves when they read cleanly (GSTINs valid, totals agree, not a duplicate); the rest wait
+  under "Needs checking".
+- GST step-by-step for the month: GSTR-1 JSON, GSTR-2B import with claim / hold advice per bill (credit only
+  for bills in 2B, carried forward until they appear), GSTR-3B JSON in the GSTN format, GSTR-9 tables + CSV.
+- TDS payment helper: challan details by payment code, link to e-Pay Tax, record the challan afterwards.
+- Payroll: employees, monthly run (PF, ESI, TN professional tax, TDS, LOP, advances), payroll journal, salary
+  payment, statutory dues, PF ECR text and Form 138 annexure.
+- Connected dashboards: STAY BAY (payroll only) and Eco Pack (company, items, opening stock, customers,
+  invoices, receipts, raw-material bills, daily production, repairs, payroll); re-sync never duplicates.
+- Production (stock journal): materials consumed → finished goods at moving average cost; P&L shows cost
+  of materials consumed and change in finished goods.
 - Built-in, searchable user manual.
 - Forgot username / password: one-time recovery code shown when the owner account is created (single use,
   5 wrong tries lock it for 15 minutes); the server version will use OTP to mobile / email instead.
@@ -52,6 +63,7 @@ Source is in `src/` (`index.html`, `styles.css`, `js/*.js`). After editing:
 - IRN, e-way bill and return filing are simulated; live filing needs a licensed GSP / ASP connection.
 - Bill photo reading uses Tesseract OCR in the browser and needs internet the first time; accuracy on
   real phone photos (blur, angles, handwriting) still has to be tested with real bills.
-- Payroll (from STAY BAY), multi-currency and inventory warehouses are not in this build.
+- Multi-currency and inventory warehouses are not in this build.
+- Connected dashboards are read from the same browser (or a backup file); live server-to-server sync comes with the server version.
 - Subscription payments are simulated; a real gateway (Razorpay / PayU) comes with the server version.
 - TDS / TCS returns are prepared here but filed through the government utility (RPU / FVU) for now.

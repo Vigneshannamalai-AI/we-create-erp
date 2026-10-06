@@ -69,7 +69,7 @@ a{color:var(--brand)}
 .page-head p{color:var(--ink-2);font-size:13px;margin-top:2px;max-width:760px}
 .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:18px}
-.card+.card{margin-top:16px}
+.card+.card{margin-top:16px}.grid>.card+.card{margin-top:0}
 .card h2{font-size:15px;margin-bottom:12px;display:flex;align-items:center;gap:8px}
 .grid{display:grid;gap:16px}
 .g2{grid-template-columns:repeat(2,minmax(0,1fr))}.g3{grid-template-columns:repeat(3,minmax(0,1fr))}.g4{grid-template-columns:repeat(4,minmax(0,1fr))}
@@ -376,6 +376,9 @@ select{max-width:100%}
   .vform .row>div{min-width:0;max-width:100%}
 }
 
+.steps{margin:6px 0 4px 20px;line-height:1.75;font-size:13.5px}
+.steps li{padding-left:2px}
+
 </style>
 </head>
 <body>
@@ -512,6 +515,7 @@ function addMonths(ym, n) {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
 const lastDay = ym => iso(new Date(Number(ym.slice(0, 4)), Number(ym.slice(5)), 0));
+const daysIn = ym => Number(lastDay(ym).slice(8));
 // Indian financial year: 1 April to 31 March. fyOf returns the starting calendar year.
 const fyOf = s => { const y = Number(s.slice(0, 4)), m = Number(s.slice(5, 7)); return m >= 4 ? y : y - 1; };
 const fyLabel = y => `${y}-${String(y + 1).slice(2)}`;
@@ -729,7 +733,10 @@ const SYS_ACCOUNTS = [
     ['roundOff', 'Round Off', 'indexp'], ['capital', "Owner's Capital", 'capital'], ['salary', 'Salaries & Wages', 'empexp'],
     ['rent', 'Rent', 'indexp'], ['freight', 'Freight Inward', 'direxp'], ['professional', 'Legal & Professional Fees', 'indexp'],
     ['depreciation', 'Depreciation', 'deprec'], ['interest', 'Interest on Loans', 'fincost'], ['bankCharges', 'Bank Charges', 'fincost'],
-    ['discountAllowed', 'Discount Allowed', 'indexp'], ['misc', 'Miscellaneous Expenses', 'indexp'], ['otherIncome', 'Interest Received', 'indinc']
+    ['discountAllowed', 'Discount Allowed', 'indexp'], ['misc', 'Miscellaneous Expenses', 'indexp'], ['otherIncome', 'Interest Received', 'indinc'],
+    ['erPf', "Employer's Contribution to PF", 'empexp'], ['erEsi', "Employer's Contribution to ESI", 'empexp'],
+    ['salPay', 'Salary Payable', 'curliab'], ['pfPay', 'PF Payable', 'duties'], ['esiPay', 'ESI Payable', 'duties'], ['ptPay', 'Professional Tax Payable', 'duties'],
+    ['tdsSalPay', 'TDS on Salary Payable', 'duties'], ['salAdv', 'Salary Advances to Staff', 'loansadv'], ['repairs', 'Repairs & Maintenance – Machinery', 'direxp']
 ];
 
 const VTYPES = {
@@ -740,7 +747,8 @@ const VTYPES = {
     RC: { name: 'Receipt', short: 'Receipt', prefix: 'RCT', key: 'F6' },
     PY: { name: 'Payment', short: 'Payment', prefix: 'PMT', key: 'F5' },
     JV: { name: 'Journal', short: 'Journal', prefix: 'JV', key: 'F7' },
-    CT: { name: 'Contra', short: 'Contra', prefix: 'CTR', key: 'F4' }
+    CT: { name: 'Contra', short: 'Contra', prefix: 'CTR', key: 'F4' },
+    SJ: { name: 'Production (stock journal)', short: 'Production', prefix: 'PRD', key: 'Alt+F7' }
 };
 const ITEM_TYPES = ['SI', 'PB', 'CN', 'DN'];
 const GST_RATES = [0, 0.25, 3, 5, 18, 40];   // GST 2.0 slabs from 22 Sep 2025 (+ 3% gold, 0.25% rough diamonds)
@@ -796,15 +804,70 @@ function safeSet(key, value) {
         return false;
     }
 }
+// Company books live in IndexedDB (hundreds of MB) instead of localStorage (5 MB, shared with the STAY BAY and
+// Eco Pack dashboards on the same site). Everything is held in memory and written behind, so the code stays simple.
+const store = (() => {
+    const cache = {};
+    let db = null, timer = null;
+    const dirty = new Set();
+    const req = r => new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+    async function init() {
+        try {
+            db = await new Promise((res, rej) => { const r = indexedDB.open('wcerp-books', 1); r.onupgradeneeded = () => r.result.createObjectStore('co'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+            const os = db.transaction('co', 'readonly').objectStore('co');
+            const [keys, vals] = await Promise.all([req(os.getAllKeys()), req(os.getAll())]);
+            keys.forEach((k, i) => { cache[k] = vals[i]; });
+        } catch (e) { console.warn('IndexedDB unavailable, using localStorage', e); db = null; }
+        // Move books saved by earlier versions out of localStorage
+        Object.keys(localStorage).filter(k => k.startsWith('wcerp.co.')).forEach(k => {
+            const id = k.slice(9);
+            if (!cache[id]) { cache[id] = localStorage.getItem(k); dirty.add(id); }
+            if (db) localStorage.removeItem(k);
+        });
+        await flush();
+    }
+    async function flush() {
+        clearTimeout(timer); timer = null;
+        if (!dirty.size) return;
+        const ids = [...dirty]; dirty.clear();
+        if (!db) { ids.forEach(id => cache[id] == null ? localStorage.removeItem(coKey(id)) : safeSet(coKey(id), cache[id])); return; }
+        try {
+            const tx = db.transaction('co', 'readwrite'), os = tx.objectStore('co');
+            ids.forEach(id => cache[id] == null ? os.delete(id) : os.put(cache[id], id));
+            await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = () => rej(tx.error); tx.onabort = () => rej(tx.error); });
+        } catch (e) {
+            console.error(e); ids.forEach(id => dirty.add(id));
+            const bar = document.getElementById('saveWarn'); if (bar) bar.hidden = false;
+        }
+    }
+    return {
+        init, flush,
+        get: id => cache[id] ?? (db ? null : localStorage.getItem(coKey(id))),
+        put(id, text) { cache[id] = text; dirty.add(id); if (!timer) timer = setTimeout(flush, 250); },
+        del(id) { cache[id] = null; dirty.add(id); flush(); },
+        ids: () => Object.keys(cache).filter(k => cache[k] != null),
+        size: () => Object.values(cache).reduce((n, t) => n + (t ? t.length : 0), 0)
+    };
+})();
+addEventListener('pagehide', () => store.flush());
+addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') store.flush(); });
+
+// Bulk mode: imports post hundreds of vouchers; save once at the end instead of after each one.
+let bulkDepth = 0;
+function inBulk(fn) {
+    bulkDepth++;
+    try { return fn(); } finally { bulkDepth--; if (!bulkDepth) saveCo(); }
+}
 function saveCo() {
     if (!co) return;
     ver++;
-    safeSet(coKey(co.id), JSON.stringify(co));
+    if (bulkDepth) return;
+    store.put(co.id, JSON.stringify(co));
     const entry = meta.companies.find(c => c.id === co.id);
     if (entry) { entry.name = co.profile.name; entry.gstin = co.profile.gstin; entry.updated = new Date().toISOString(); saveMeta(); }
 }
 function loadCo(id) {
-    try { return JSON.parse(localStorage.getItem(coKey(id)) || 'null'); } catch (e) { return null; }
+    try { return JSON.parse(store.get(id) || 'null'); } catch (e) { return null; }
 }
 function openCompany(id) {
     const data = loadCo(id);
@@ -831,7 +894,8 @@ function newCompanyData(profile) {
     return c;
 }
 function upgradeCo(c) {
-    ['accounts', 'contacts', 'items', 'vouchers', 'bankLines', 'gstr2b', 'filings', 'rules', 'audit'].forEach(k => { c[k] ||= []; });
+    ['accounts', 'contacts', 'items', 'vouchers', 'bankLines', 'gstr2b', 'filings', 'rules', 'audit', 'employees'].forEach(k => { c[k] ||= []; });
+    c.payroll ||= {}; c.links ||= {};
     c.series ||= {};
     c.vouchers.forEach(v => { if (v.tdsMonth && !v.taxMonth) { v.taxMonth = v.tdsMonth; delete v.tdsMonth; } });
     c.settings ||= { lockDate: '', prefixes: {} };
@@ -909,6 +973,7 @@ function supplyKind(v) {
 }
 function computeVoucher(v) {
     if (!ITEM_TYPES.includes(v.type)) {
+        if (v.type === 'SJ') { v.totals = { total: 0 }; return v; }
         if (v.type === 'JV') v.totals = { total: sum(v.jlines || [], 'dr') };
         else v.totals = { total: r2(v.amount) + r2(v.tds?.amount || 0) };
         return v;
@@ -1089,37 +1154,55 @@ function openBills(partyId, type, excludeVid) {
 }
 const dueDate = v => addDays(v.date, Number(contactById(v.partyId)?.creditDays) || 0);
 
-// ---------- stock (weighted average cost) ----------
+// ---------- stock (moving weighted average cost, AS 2) ----------
+// Events are applied in date order. Purchases set the average; sales and consumption take stock out at the average;
+// a production entry (SJ) moves the cost of what was consumed into what was produced.
+const stockCache = new Map();
 function stockAt(date) {
+    const key = `${ver}|${co.id}|${date}`;
+    if (stockCache.has(key)) return stockCache.get(key);
+    if (stockCache.size > 60) stockCache.clear();
     const res = {};
     co.items.filter(i => i.type === 'goods' && i.trackStock !== false).forEach(i => {
-        res[i.id] = { qty: Number(i.openQty) || 0, inQty: Number(i.openQty) || 0, inVal: Number(i.openValue) || 0 };
+        const q = Number(i.openQty) || 0, val = Number(i.openValue) || 0;
+        res[i.id] = { qty: q, val, avg: q > 0 ? val / q : 0, kind: i.kind || 'trading' };
     });
-    co.vouchers.forEach(v => {
-        if (v.status === 'cancelled' || !ITEM_TYPES.includes(v.type) || v.date > date) return;
-        (v.lines || []).forEach(l => {
-            const r = res[l.itemId];
-            if (!r) return;
-            const q = Number(l.qty) || 0;
-            if (v.type === 'PB') { r.qty += q; r.inQty += q; r.inVal += l.taxable + (v.itc === false ? l.cgst + l.sgst + l.igst : 0); }
-            if (v.type === 'DN') { r.qty -= q; r.inQty -= q; r.inVal -= l.taxable; }
-            if (v.type === 'SI') r.qty -= q;
-            if (v.type === 'CN') r.qty += q;
+    const out = (r, q) => { const a = r.avg; r.qty -= q; r.val = r.qty > 0 ? r.val - q * a : 0; if (r.qty <= 0) r.val = 0; return q * a; };
+    const inn = (r, q, val) => { r.qty += q; r.val += val; r.avg = r.qty > 0 ? r.val / r.qty : r.avg; };
+    co.vouchers.filter(v => v.status !== 'cancelled' && v.date <= date && (ITEM_TYPES.includes(v.type) || v.type === 'SJ'))
+        .sort((a, b) => a.date.localeCompare(b.date) || (a.created || '').localeCompare(b.created || ''))
+        .forEach(v => {
+            if (v.type === 'SJ') {
+                let cost = sum(v.costs || [], c => Number(c.amt) || 0);
+                (v.consume || []).forEach(l => { const r = res[l.itemId]; if (r) cost += out(r, Number(l.qty) || 0); });
+                const outs = (v.produce || []).filter(l => res[l.itemId]);
+                const w = outs.reduce((s2, l) => s2 + (Number(l.qty) || 0) * (Number(l.weight) || 1), 0);
+                outs.forEach(l => inn(res[l.itemId], Number(l.qty) || 0, w ? cost * (Number(l.qty) || 0) * (Number(l.weight) || 1) / w : 0));
+                return;
+            }
+            (v.lines || []).forEach(l => {
+                const r = res[l.itemId];
+                if (!r) return;
+                const q = Number(l.qty) || 0;
+                if (v.type === 'PB') inn(r, q, l.taxable + (v.itc === false ? l.cgst + l.sgst + l.igst : 0));
+                if (v.type === 'DN') { r.qty -= q; r.val = Math.max(0, r.val - l.taxable); r.avg = r.qty > 0 ? r.val / r.qty : r.avg; }
+                if (v.type === 'SI') out(r, q);
+                if (v.type === 'CN') inn(r, q, q * r.avg);
+            });
         });
-    });
     let value = 0;
-    Object.entries(res).forEach(([id, r]) => {
-        r.avg = r.inQty > 0 ? r.inVal / r.inQty : 0;
-        r.value = r2(Math.max(0, r.qty) * r.avg);
-        value += r.value;
-    });
-    return { items: res, value: r2(value) };
+    const byKind = { raw: 0, finished: 0, trading: 0 };
+    Object.values(res).forEach(r => { r.value = r2(Math.max(0, r.val)); value += r.value; byKind[r.kind] = (byKind[r.kind] || 0) + r.value; });
+    const result = { items: res, value: r2(value), byKind };
+    stockCache.set(key, result);
+    return result;
 }
 const openingStockValue = () => sum(co.items.filter(i => i.type === 'goods'), i => Number(i.openValue) || 0);
-function stockValueAt(date) {
-    if (date < co.profile.booksFrom) return openingStockValue();
-    return stockAt(date).value;
+function stockValueAt(date, kind) {
+    if (date < co.profile.booksFrom) return kind ? sum(co.items.filter(i => i.type === 'goods' && (i.kind || 'trading') === kind), i => Number(i.openValue) || 0) : openingStockValue();
+    return kind ? r2(stockAt(date).byKind[kind] || 0) : stockAt(date).value;
 }
+const isManufacturer = () => co.items.some(i => i.kind === 'raw');
 
 // ---------- financial statements (Schedule III, Division I – Accounting Standards) ----------
 function plData(from, to) {
@@ -1135,7 +1218,13 @@ function plData(from, to) {
     const totalExp = r2(tot(purchases) + changeInv + tot(employee) + tot(finance) + tot(dep) + tot(otherExp));
     const pbt = r2(totalIncome - totalExp);
     const pat = r2(pbt - tot(tax));
-    return { from, to, revenue, other, purchases, employee, finance, dep, otherExp, tax, openStock, closeStock, changeInv, totalIncome, totalExp, pbt, pat, tot };
+    // Manufacturer (raw materials marked as such): Schedule III shows cost of materials consumed separately
+    // from the change in finished goods. The total is the same.
+    const mfg = isManufacturer();
+    const rawOpen = mfg ? stockValueAt(addDays(from, -1), 'raw') : 0, rawClose = mfg ? stockValueAt(to, 'raw') : 0;
+    const materials = r2(tot(purchases) + rawOpen - rawClose);
+    const changeFg = r2(changeInv - (rawOpen - rawClose));
+    return { from, to, revenue, other, purchases, employee, finance, dep, otherExp, tax, openStock, closeStock, changeInv, totalIncome, totalExp, pbt, pat, tot, mfg, rawOpen, rawClose, materials, changeFg };
 }
 const profitBetween = (from, to) => plData(from, to).pat;
 
@@ -1299,6 +1388,11 @@ function validateVoucher(v, old) {
         if (!a || !b || !['bank', 'cash'].includes(a.group) || !['bank', 'cash'].includes(b.group)) E.push('Contra moves money between cash and bank accounts only.');
         if (v.accountId === v.toId) E.push('From and To must be different.');
         if (!(Number(v.amount) > 0)) E.push('Amount must be more than zero.');
+    } else if (v.type === 'SJ') {
+        const goods = id => { const it = itemById(id); return it && it.type === 'goods' && it.trackStock !== false; };
+        if (!(v.produce || []).some(l => goods(l.itemId) && Number(l.qty) > 0)) E.push('Add at least one item produced.');
+        if (!(v.consume || []).some(l => goods(l.itemId) && Number(l.qty) > 0)) E.push('Add at least one material consumed.');
+        [...(v.consume || []), ...(v.produce || [])].forEach(l => { if (!goods(l.itemId)) E.push('Production can only use stock items.'); if (!(Number(l.qty) > 0)) E.push('Quantities must be more than zero.'); });
     } else if (v.type === 'JV') {
         const L = (v.jlines || []).filter(l => l.acc && (Number(l.dr) || Number(l.cr)));
         if (L.length < 2) E.push('A journal needs at least two lines.');
@@ -1370,12 +1464,21 @@ function saveVoucher(input, opts = {}) {
     computeVoucher(v);
     const errors = validateVoucher(v, old);
     if (errors.length) { const e = new Error(errors.join('\n')); e.list = errors; throw e; }
-    if (!old) {
+    if (!old && v.ext && co.vouchers.some(x => x.ext === v.ext)) throw new Error(`Already imported (${v.ext}).`);
+    if (!old && opts.keepNo) {
+        // A document issued elsewhere (an Eco Pack invoice, a scanned sales invoice) keeps its own number
+        const no = String(input.no || '').trim();
+        if (!/^[A-Za-z0-9/-]{1,16}$/.test(no)) throw new Error('The document number must be 1–16 letters, digits, / or -.');
+        if (co.vouchers.some(x => x.type === v.type && x.no === no && fyOf(x.date) === fyOf(v.date))) throw new Error(`${VTYPES[v.type].name} ${no} already exists.`);
+        v.id = uid('v'); v.no = no; v.status = 'active'; v.created = opts.created || new Date().toISOString(); v.createdBy = me?.name || 'System';
+        co.vouchers.push(v);
+        audit(`${VTYPES[v.type].name} recorded`, { entity: 'Voucher', ref: v.no, after: summarize(v), reason: opts.source || '' });
+    } else if (!old) {
         const nx = nextNumber(v.type, v.date);
         v.id = uid('v');
         v.no = nx.no;
         v.status = 'active';
-        v.created = new Date().toISOString();
+        v.created = opts.created || new Date().toISOString();
         v.createdBy = me?.name || 'System';
         co.series[nx.key] = nx.n;
         co.vouchers.push(v);
@@ -1586,21 +1689,28 @@ function gstr3b(ym) {
         else add(a, v, s);
         if (v.kind === 'B2C' && v.totals.inter) { const x = interUnreg[v.pos] ||= { pos: v.pos, txval: 0, iamt: 0 }; x.txval += s * v.totals.taxable; x.iamt += s * v.totals.igst; }
     }));
+    const basis = has2b(ym) ? '2B' : 'books';
+    const deferred = z();
     bills.forEach(v => {
         if (v.rcm) { add(d, v, 1); add(itcRcm, v, 1); return; }
         if (v.itc === false) { add(ineligible, v, 1); return; }
-        if (v.totals.tax) add(itcOther, v, 1);
+        if (v.totals.tax && (basis === 'books' || !isRegistered(contactById(v.partyId)))) add(itcOther, v, 1);
+    });
+    if (basis === '2B') recon2b(ym).forEach(x => {
+        if (x.claim) { itcOther.iamt += x.claim.iamt; itcOther.camt += x.claim.camt; itcOther.samt += x.claim.samt; }
+        if (x.v && ymOf(x.v.date) === ym && (!x.claim || x.status === 'Mismatch')) { const c = x.claim || { iamt: 0, camt: 0, samt: 0 }; deferred.iamt += x.v.totals.igst - c.iamt; deferred.camt += x.v.totals.cgst - c.camt; deferred.samt += x.v.totals.sgst - c.samt; }
     });
     dns.forEach(v => { if (!v.rcm && v.itc !== false && v.totals.tax) add(reversal, v, 1); });
     const R = o => Object.fromEntries(Object.entries(o).map(([k, x]) => [k, r2(x)]));
     const itcAvail = R({ iamt: itcRcm.iamt + itcOther.iamt, camt: itcRcm.camt + itcOther.camt, samt: itcRcm.samt + itcOther.samt });
     // Credit left over from earlier months (what is still in the input ledgers at the end of last month)
     const prevEnd = lastDay(addMonths(ym, -1));
-    const carryIn = R({ iamt: Math.max(0, balance(sysId('inIgst'), prevEnd)), camt: Math.max(0, balance(sysId('inCgst'), prevEnd)), samt: Math.max(0, balance(sysId('inSgst'), prevEnd)) });
+    const pend = itcPending(addMonths(ym, -1));
+    const carryIn = R({ iamt: Math.max(0, balance(sysId('inIgst'), prevEnd) - pend.iamt), camt: Math.max(0, balance(sysId('inCgst'), prevEnd) - pend.camt), samt: Math.max(0, balance(sysId('inSgst'), prevEnd) - pend.samt) });
     const itcNet = R({ iamt: itcAvail.iamt - reversal.iamt + carryIn.iamt, camt: itcAvail.camt - reversal.camt + carryIn.camt, samt: itcAvail.samt - reversal.samt + carryIn.samt });
     const liab = R({ iamt: a.iamt + b.iamt, camt: a.camt, samt: a.samt });
     const rcmLiab = R({ iamt: d.iamt, camt: d.camt, samt: d.samt });
-    return { ym, carryIn, a: R(a), b: R(b), c: R(c), d: R(d), interUnreg: Object.values(interUnreg).map(R), itcRcm: R(itcRcm), itcOther: R(itcOther), reversal: R(reversal), ineligible: R(ineligible), itcAvail, itcNet, liab, rcmLiab, setoff: setOff(liab, itcNet, rcmLiab) };
+    return { ym, basis, deferred: R(deferred), carryIn, a: R(a), b: R(b), c: R(c), d: R(d), interUnreg: Object.values(interUnreg).map(R), itcRcm: R(itcRcm), itcOther: R(itcOther), reversal: R(reversal), ineligible: R(ineligible), itcAvail, itcNet, liab, rcmLiab, setoff: setOff(liab, itcNet, rcmLiab) };
 }
 // Rule 88A order: IGST credit first (IGST, then CGST/SGST); CGST credit → CGST then IGST; SGST credit → SGST then IGST. RCM is paid in cash.
 function setOff(liab, itc, rcm) {
@@ -1724,23 +1834,68 @@ function import2b(text, period) {
     saveCo();
     return { period, count: rows.length };
 }
+// Matches the month's purchase bills with GSTR-2B. Also picks up bills from earlier months that the supplier has
+// only now filed. Each line says what to do and how much input credit can be claimed this month.
+const has2b = ym => co.gstr2b.some(r => r.period === ym);
+const taxSplit = v => ({ iamt: v.totals.igst, camt: v.totals.cgst, samt: v.totals.sgst });
+const itcBills = () => co.vouchers.filter(v => v.type === 'PB' && v.status !== 'cancelled' && !v.rcm && v.itc !== false && v.totals.tax && isRegistered(contactById(v.partyId)));
 function recon2b(period) {
     const bills = activeIn(['PB'], period).filter(v => !v.rcm && isRegistered(contactById(v.partyId)));
     const portal = co.gstr2b.filter(r => r.period === period);
     const used = new Set();
     const out = [];
+    const claimedBefore = claimedMap(addMonths(period, -1));
     bills.forEach(v => {
         const g = contactById(v.partyId).gstin;
         const m = portal.find(r => !used.has(r.id) && r.gstin === g && normInv(r.inv) === normInv(v.refNo));
         const bookTax = v.totals.tax;
-        if (!m) { out.push({ status: 'Only in books', v, bookTax, note: 'Supplier has not filed it: ITC cannot be claimed yet (Section 16(2)(aa)).' }); return; }
+        const name = contactById(v.partyId).name;
+        if (!m) { out.push({ status: 'Only in books', v, bookTax, claim: null, note: 'The supplier has not filed this invoice yet, so its credit cannot be claimed this month (section 16(2)(aa)).', action: `Ask ${name} to file it in their GSTR-1 / IFF. The credit is carried forward and claimed automatically in the month it appears in 2B.` }); return; }
         used.add(m.id);
         const portalTax = r2(m.igst + m.cgst + m.sgst);
         const ok = Math.abs(portalTax - bookTax) <= 1 && Math.abs(m.taxable - v.totals.taxable) <= 1;
-        out.push({ status: ok ? 'Matched' : 'Mismatch', v, r: m, bookTax, portalTax, note: ok ? '' : `Taxable ${inr(v.totals.taxable)} vs ${inr(m.taxable)}, tax ${inr(bookTax)} vs ${inr(portalTax)}` });
+        const rejected = m.ims === 'Rejected';
+        const lower = portalTax < bookTax ? { iamt: m.igst, camt: m.cgst, samt: m.sgst } : taxSplit(v);
+        out.push({ status: ok ? 'Matched' : 'Mismatch', v, r: m, bookTax, portalTax, claim: rejected ? null : (ok ? taxSplit(v) : lower),
+            note: ok ? '' : `Taxable ${inr(v.totals.taxable)} vs ${inr(m.taxable)}, tax ${inr(bookTax)} vs ${inr(portalTax)}`,
+            action: rejected ? 'Rejected in IMS — no credit.' : ok ? 'Claim in full.' : portalTax < bookTax ? `Claim ${inr(portalTax)} (the lower amount). Ask ${name} to amend their GSTR-1, or check your bill entry.` : `Claim ${inr(bookTax)} as per your bill; the supplier has reported more — check whether your bill entry is short.` });
     });
-    portal.filter(r => !used.has(r.id)).forEach(r => out.push({ status: 'Only in 2B', r, portalTax: r2(r.igst + r.cgst + r.sgst), note: 'Not in your books: enter the bill, or reject it in IMS if it is not yours.' }));
+    portal.filter(r => !used.has(r.id)).forEach(r => {
+        const portalTax = r2(r.igst + r.cgst + r.sgst);
+        const earlier = itcBills().find(v => v.date < `${period}-01` && contactById(v.partyId).gstin === r.gstin && normInv(v.refNo) === normInv(r.inv));
+        if (earlier && !claimedBefore[earlier.id]) {
+            const lower = portalTax < earlier.totals.tax ? { iamt: r.igst, camt: r.cgst, samt: r.sgst } : taxSplit(earlier);
+            out.push({ status: 'Earlier bill, now in 2B', v: earlier, r, bookTax: earlier.totals.tax, portalTax, claim: r.ims === 'Rejected' ? null : lower, note: `Bill of ${fmtDate(earlier.date)} that the supplier filed late.`, action: 'Claim it this month.' });
+            return;
+        }
+        out.push({ status: 'Only in 2B', r, portalTax, claim: null, note: 'Not in your books.', action: 'If it is your purchase, enter the bill (button below) and it is claimed this month. If it is not yours or is wrong, mark it Rejected in IMS before filing GSTR-3B.' });
+    });
     return out;
+}
+// For each bill: how much credit has been claimed through GSTR-2B up to and including a month
+function claimedMap(uptoYm) {
+    const m = {};
+    [...new Set(co.gstr2b.map(r => r.period))].filter(p => p <= uptoYm).sort().forEach(p => {
+        recon2bLite(p, m);
+    });
+    return m;
+}
+function recon2bLite(period, m) {
+    const portal = co.gstr2b.filter(r => r.period === period && r.ims !== 'Rejected');
+    portal.forEach(r => {
+        const v = itcBills().find(b => b.date <= lastDay(period) && contactById(b.partyId).gstin === r.gstin && normInv(b.refNo) === normInv(r.inv));
+        if (v && !m[v.id]) { const pt = r2(r.igst + r.cgst + r.sgst); m[v.id] = pt < v.totals.tax ? { iamt: r.igst, camt: r.cgst, samt: r.sgst } : taxSplit(v); }
+    });
+}
+// Credit sitting in the input ledgers that cannot be claimed yet (bills of months with 2B imported, not yet in 2B)
+function itcPending(uptoYm) {
+    const claimed = claimedMap(uptoYm);
+    const P = { iamt: 0, camt: 0, samt: 0 };
+    itcBills().filter(v => ymOf(v.date) <= uptoYm && has2b(ymOf(v.date))).forEach(v => {
+        const c = claimed[v.id] || { iamt: 0, camt: 0, samt: 0 };
+        P.iamt += v.totals.igst - c.iamt; P.camt += v.totals.cgst - c.camt; P.samt += v.totals.sgst - c.samt;
+    });
+    return { iamt: r2(P.iamt), camt: r2(P.camt), samt: r2(P.samt) };
 }
 
 // ---------- TDS ----------
@@ -1844,7 +1999,19 @@ function complianceItems(fy) {
         if (hasTds && (open || tdsReg.months.find(m => m.ym === ym)?.deducted)) add('TDS-PAY', ym, depositDue(ym), `TDS deposit · ${ymLabel(ym)}`, 'Income-tax Act 2025');
         if (hasTcs && (open || tcsReg.months.find(m => m.ym === ym)?.deducted)) add('TCS-PAY', ym, depositDue(ym), `TCS deposit · ${ymLabel(ym)}`, 'Income-tax Act 2025 s.394');
     });
+    // Payroll dues: PF and ESI by the 15th, TDS on salary by the 7th, Form 138 quarterly
+    const runs = Object.entries(co.payroll || {}).filter(([ym, r]) => r.status !== 'draft' && fyOf(ym + '-01') === fy);
+    runs.forEach(([ym, r]) => {
+        const T = runTotals(r);
+        const paid = k => sum(co.vouchers.filter(v => v.type === 'PY' && v.status !== 'cancelled' && v.ledgerId === sysId(STAT[k].ledger) && v.taxMonth === ym), 'amount');
+        [['pf', 'PF-PAY', 'PF deposit (EPFO ECR)', 'EPF Act'], ['esi', 'ESI-PAY', 'ESI deposit', 'ESI Act'], ['tds', 'TDSSAL-PAY', 'TDS on salary deposit', 'Income-tax Act 2025 s.392']].forEach(([k, type, label, law]) => {
+            const amt = STAT[k].amt(T);
+            if (!amt) return;
+            items.push({ type, period: ym, due: STAT[k].due(ym), label: `${label} · ${ymLabel(ym)}`, law, filed: paid(k) >= amt - 0.5 ? { filedOn: '', ref: 'Paid' } : null });
+        });
+    });
     Object.keys(QUARTERS).forEach(q => {
+        if (runs.some(([ym, r]) => quarterOf(ym) === q && runTotals(r).tds)) add('FORM-138', `${q}-${fy}`, returnDue(fy, q), `Salary TDS return Form 138 (old 24Q) · ${q}`, 'Income-tax Act 2025 s.397');
         if (hasTds) add('FORM-140', `${q}-${fy}`, returnDue(fy, q), `TDS return Form 140 (old 26Q) · ${q}`, 'Income-tax Act 2025 s.397');
         if (hasTcs) add('FORM-143', `${q}-${fy}`, returnDue(fy, q), `TCS return Form 143 (old 27EQ) · ${q}`, 'Income-tax Act 2025 s.397');
     });
@@ -2030,6 +2197,128 @@ function draftFromBill(p) {
     };
     const newParty = !party && partyGstin ? { type: type === 'PB' ? 'vendor' : 'customer', name: p.sellerName || `Party ${partyGstin}`, gstin: partyGstin, state: partyGstin.slice(0, 2), pan: partyGstin.slice(2, 12) } : null;
     return { type, v, newParty, partyGstin };
+}
+
+// ---------- filing advisor: what to check and what to do, month by month ----------
+function gstAdvice(ym) {
+    const A = [];
+    const add = (level, text, how, route) => A.push({ level, text, how, route });
+    const g1 = gstr1(ym), g3 = gstr3b(ym);
+    const sales = activeIn(['SI'], ym);
+    const due1 = co.profile.gstFreq === 'quarterly' ? '' : `${addMonths(ym, 1)}-11`, due3 = `${addMonths(ym, 1)}-20`;
+    const filed = t => co.filings.some(f => f.type === t && (f.period === ym || f.period === `${quarterOf(ym)}-${fyOf(ym + '-01')}`));
+    // GSTR-1
+    const noIrn = sales.filter(v => einvoiceApplies(v) && !v.irn);
+    if (noIrn.length) add('bad', `${noIrn.length} B2B invoice(s) have no e-invoice IRN`, 'Generate the IRN first — invoices without one are not valid above ₹5 crore turnover, and the IRP refuses them after 30 days (₹10 crore+).', '#/gst/ein');
+    const b2cNoPos = sales.filter(v => v.kind === 'B2C' && !v.pos);
+    if (b2cNoPos.length) add('warn', `${b2cNoPos.length} B2C invoice(s) without a place of supply`, 'Open each and choose the state; GSTR-1 table 7 needs it.', '#/sales');
+    if (!filed('GSTR-1')) add('info', `GSTR-1: ${g1.summary.invoices} invoice(s), ${g1.summary.notes} credit note(s), taxable ${inr(g1.summary.taxable)}`, `Download the JSON on the GSTR-1 tab, upload it on the portal (Returns Dashboard → GSTR-1 → Prepare offline → Upload), check the summary, file with EVC/DSC by ${due1 ? fmtDate(due1) : 'the 13th after the quarter'}, then enter the ARN here.`, '#/gst/r1');
+    // GSTR-2B
+    if (!has2b(ym) && activeIn(['PB'], ym).some(v => !v.rcm && v.totals.tax)) add('warn', 'GSTR-2B not imported for this month', `Download GSTR-2B (JSON) from the portal (available on the 14th) and import it on the GSTR-2B tab. Until then input credit is shown as per your books, which may be more than you can legally claim.`, '#/gst/2b');
+    if (has2b(ym)) {
+        const R = recon2b(ym);
+        const cnt = st => R.filter(x => x.status === st).length;
+        if (cnt('Only in books')) add('warn', `${cnt('Only in books')} bill(s) not yet in the supplier's GSTR-1`, `Credit of ${inr(g3.deferred.iamt + g3.deferred.camt + g3.deferred.samt)} is held back and claimed automatically when it appears. Remind the suppliers.`, '#/gst/2b');
+        if (cnt('Only in 2B')) add('warn', `${cnt('Only in 2B')} invoice(s) in 2B are not in your books`, 'Enter the bill if it is yours; otherwise reject it in IMS before filing GSTR-3B.', '#/gst/2b');
+        if (cnt('Mismatch')) add('warn', `${cnt('Mismatch')} amount mismatch(es) with 2B`, 'The lower amount is claimed. Check your entry or ask the supplier to amend.', '#/gst/2b');
+        if (cnt('Earlier bill, now in 2B')) add('info', `${cnt('Earlier bill, now in 2B')} earlier bill(s) now in 2B`, 'Their credit is included in this month\'s GSTR-3B.', '#/gst/2b');
+    }
+    // GSTR-3B
+    const cash = g3.setoff.totalCash;
+    if (!filed('GSTR-3B')) add(cash > 0 ? 'info' : 'good', `GSTR-3B: pay ${inr(cash)} in cash${cash ? ` (IGST ${inr(g3.setoff.cash.iamt)}, CGST ${inr(g3.setoff.cash.camt)}, SGST ${inr(g3.setoff.cash.samt)})` : ''}`, `The portal fills outward tax from your GSTR-1 (locked) and credit from GSTR-2B. Compare every box with the GSTR-3B tab, adjust credit if needed, create the challan (PMT-06) for the cash part, file by ${fmtDate(due3)}, then press "Post set-off journal" and record the payment here.`, '#/gst/r3b');
+    if (!filed('GSTR-3B') && due3 < todayISO()) {
+        const days = daysBetween(due3, todayISO());
+        add('bad', `GSTR-3B is ${days} day(s) late`, `Late fee ₹${Math.min(days * (cash ? 50 : 20), 10000)} so far (₹50 a day, ₹20 for a nil return) and interest at 18% a year on the cash tax (≈ ${inr(Math.round(cash * 0.18 * days / 365))}).`, '#/gst/r3b');
+    }
+    if (g3.ineligible.iamt + g3.ineligible.camt + g3.ineligible.samt) add('info', `${inr(g3.ineligible.iamt + g3.ineligible.camt + g3.ineligible.samt)} blocked credit (section 17(5))`, 'Report it in table 4(D)(1); it is already part of the cost in your books.', '#/gst/r3b');
+    return A;
+}
+
+// GSTR-3B in the GSTN data format (for GST Suvidha Providers / tax-professional software)
+function gstr3bJson(ym) {
+    const g = gstr3b(ym);
+    const t = x => ({ txval: r2(x.txval || 0), iamt: r2(x.iamt || 0), camt: r2(x.camt || 0), samt: r2(x.samt || 0), csamt: 0 });
+    const tx = x => ({ iamt: r2(x.iamt || 0), camt: r2(x.camt || 0), samt: r2(x.samt || 0), csamt: 0 });
+    return {
+        gstin: co.profile.gstin, ret_period: ym.slice(5) + ym.slice(0, 4),
+        sup_details: { osup_det: t(g.a), osup_zero: t(g.b), osup_nil_exmp: t(g.c), isup_rev: t(g.d), osup_nongst: t({}) },
+        inter_sup: { unreg_details: g.interUnreg.map(x => ({ pos: x.pos, txval: r2(x.txval), iamt: r2(x.iamt) })), comp_details: [], uin_details: [] },
+        itc_elg: {
+            itc_avl: [{ ty: 'IMPG', ...tx({}) }, { ty: 'IMPS', ...tx({}) }, { ty: 'ISRC', ...tx(g.itcRcm) }, { ty: 'ISD', ...tx({}) }, { ty: 'OTH', ...tx(g.itcOther) }],
+            itc_rev: [{ ty: 'RUL', ...tx({}) }, { ty: 'OTH', ...tx(g.reversal) }],
+            itc_net: tx({ iamt: g.itcAvail.iamt - g.reversal.iamt, camt: g.itcAvail.camt - g.reversal.camt, samt: g.itcAvail.samt - g.reversal.samt }),
+            itc_inelg: [{ ty: 'RUL', ...tx(g.ineligible) }, { ty: 'OTH', ...tx({}) }]
+        },
+        inward_sup: { isup_details: [{ ty: 'GST', inter: 0, intra: 0 }, { ty: 'NONGST', inter: 0, intra: 0 }] }
+    };
+}
+
+// ---------- GSTR-9 annual return (and the GSTR-9C reconciliation above ₹5 crore) ----------
+function gstr9(fy) {
+    const months = fyMonths(fy).filter(m => lastDay(m) >= co.profile.booksFrom && m <= ymOf(todayISO()));
+    const V = co.vouchers.filter(v => v.status !== 'cancelled' && fyOf(v.date) === fy);
+    const z = () => ({ txval: 0, iamt: 0, camt: 0, samt: 0 });
+    const add = (t, v, s = 1) => { t.txval += s * v.totals.taxable; t.iamt += s * v.totals.igst; t.camt += s * v.totals.cgst; t.samt += s * v.totals.sgst; };
+    const T4 = { A: z(), B: z(), C: z(), D: z(), G: z(), I: z(), J: z() }, T5 = { A: z(), B: z(), D: z(), E: z(), H: z() };
+    V.filter(v => v.type === 'SI').forEach(v => {
+        if (v.kind === 'EXP') add(v.zeroWithPay ? T4.C : T5.A, v);
+        else if (v.kind === 'SEZ') add(v.zeroWithPay ? T4.D : T5.B, v);
+        else if (v.totals.tax === 0) add(T5.E, v);
+        else add(v.kind === 'B2B' ? T4.B : T4.A, v);
+    });
+    V.filter(v => v.type === 'CN').forEach(v => add(v.totals.tax ? T4.I : T5.H, v));
+    V.filter(v => v.type === 'PB' && v.rcm).forEach(v => add(T4.G, v));
+    const sumT = (...ts) => ts.reduce((a, t) => ({ txval: a.txval + t.txval, iamt: a.iamt + t.iamt, camt: a.camt + t.camt, samt: a.samt + t.samt }), z());
+    const neg = t => ({ txval: -t.txval, iamt: -t.iamt, camt: -t.camt, samt: -t.samt });
+    T4.N = sumT(T4.A, T4.B, T4.C, T4.D, T4.G, neg(T4.I), T4.J);
+    T5.N = sumT(T5.A, T5.B, T5.D, T5.E, neg(T5.H));
+    // Table 5N = 4N + 5M − 4G: reverse-charge purchases are not our turnover
+    const turnover = r2(T4.N.txval - T4.G.txval + T5.N.txval);
+    // Table 6: credit availed through GSTR-3B, split by type of purchase
+    const r3 = months.map(m => gstr3b(m));
+    const avail = r3.reduce((a, g) => sumT(a, { txval: 0, ...g.itcOther }, { txval: 0, ...g.itcRcm }), z());
+    const typeOf = v => (v.lines || []).every(l => itemById(l.itemId)?.type === 'service' || String(l.hsn).startsWith('99')) ? 'services' : (v.lines || []).some(l => accById(l.accId || itemById(l.itemId)?.purchaseAcc)?.group === 'fixed') ? 'capital' : 'inputs';
+    const T6 = { inputs: z(), capital: z(), services: z(), rcmUnreg: z(), rcmReg: z() };
+    V.filter(v => v.type === 'PB' && v.itc !== false && v.totals.tax).forEach(v => {
+        if (v.rcm) add(isRegistered(contactById(v.partyId)) ? T6.rcmReg : T6.rcmUnreg, v);
+        else add(T6[typeOf(v)], v);
+    });
+    const t6total = sumT(T6.inputs, T6.capital, T6.services, T6.rcmUnreg, T6.rcmReg);
+    const T7 = V.filter(v => v.type === 'DN' && v.itc !== false && !v.rcm).reduce((a, v) => (add(a, v), a), z());
+    // Table 8: compare only the months whose GSTR-2B has been imported
+    const months2b = months.filter(m => has2b(m));
+    const in2b = co.gstr2b.filter(r => months2b.includes(r.period)).reduce((a, r) => sumT(a, { txval: r.taxable, iamt: r.igst, camt: r.cgst, samt: r.sgst }), z());
+    const books2b = V.filter(v => v.type === 'PB' && v.itc !== false && !v.rcm && v.totals.tax && months2b.includes(ymOf(v.date))).reduce((a, v) => (add(a, v), a), z());
+    // Table 9: tax payable and how it was paid
+    const pay = r3.reduce((a, g) => {
+        const u = g.setoff.use;
+        a.payable = sumT(a.payable, { txval: 0, ...g.liab }, { txval: 0, ...g.rcmLiab });
+        a.itc = sumT(a.itc, { txval: 0, iamt: u.iamt.iamt + u.camt.iamt + u.samt.iamt, camt: u.iamt.camt + u.camt.camt, samt: u.iamt.samt + u.samt.samt });
+        a.cash = sumT(a.cash, { txval: 0, ...g.setoff.cash });
+        return a;
+    }, { payable: z(), itc: z(), cash: z() });
+    // Table 17: HSN summary of outward supplies
+    const hsn = {};
+    V.filter(v => ['SI', 'CN'].includes(v.type)).forEach(v => (v.lines || []).forEach(l => { const s = v.type === 'CN' ? -1 : 1; const k = `${l.hsn}|${l.unit}|${l.effRate}`; const h = hsn[k] ||= { hsn: l.hsn, uqc: l.unit || 'OTH', rt: l.effRate, qty: 0, txval: 0, iamt: 0, camt: 0, samt: 0 }; h.qty += s * l.qty; h.txval += s * l.taxable; h.iamt += s * l.igst; h.camt += s * l.cgst; h.samt += s * l.sgst; }));
+    // GSTR-9C: turnover in the books vs turnover declared
+    const pl = plData(fyStart(fy) < co.profile.booksFrom ? co.profile.booksFrom : fyStart(fy), fyEnd(fy) < todayISO() ? fyEnd(fy) : todayISO());
+    const booksTurnover = r2(pl.tot(pl.revenue));
+    const R = o => Object.fromEntries(Object.entries(o).map(([k, x]) => [k, typeof x === 'object' ? Object.fromEntries(Object.entries(x).map(([a, b]) => [a, r2(b)])) : x]));
+    return { fy, months, T4: R(T4), T5: R(T5), turnover, avail: R({ a: avail }).a, T6: R(T6), t6total: R({ a: t6total }).a, T7: R({ a: T7 }).a, in2b: R({ a: in2b }).a, books2b: R({ a: books2b }).a, months2b, pay: R(pay), hsn: Object.values(hsn).map(h => R({ a: h }).a), booksTurnover, needs9c: Math.max(turnover, booksTurnover) > 50000000,   // 9C: aggregate turnover of this year above ₹5 crore
+        due: `${fy + 1}-12-31` };
+}
+function gstr9Csv(fy) {
+    const g = gstr9(fy);
+    const row = (tbl, label, t) => [tbl, label, t.txval ?? '', t.iamt, t.camt, t.samt];
+    const rows = [['Table', 'Particulars', 'Taxable value', 'IGST', 'CGST', 'SGST'],
+        row('4A', 'Supplies to unregistered persons (B2C)', g.T4.A), row('4B', 'Supplies to registered persons (B2B)', g.T4.B), row('4C', 'Exports on payment of tax', g.T4.C), row('4D', 'SEZ supplies on payment of tax', g.T4.D), row('4G', 'Inward supplies on reverse charge', g.T4.G), row('4I', 'Credit notes', g.T4.I), row('4N', 'Total (4A–4G − 4I)', g.T4.N),
+        row('5A', 'Exports without payment of tax', g.T5.A), row('5B', 'SEZ supplies without payment of tax', g.T5.B), row('5E', 'Exempted / nil rated', g.T5.E), row('5H', 'Credit notes', g.T5.H), row('5N', 'Total', g.T5.N),
+        ['5N+4N', 'Total turnover', g.turnover, '', '', ''],
+        row('6A', 'Credit availed through GSTR-3B', g.avail), row('6B', 'Inputs', g.T6.inputs), row('6B', 'Capital goods', g.T6.capital), row('6B', 'Input services', g.T6.services), row('6C', 'Reverse charge – unregistered', g.T6.rcmUnreg), row('6D', 'Reverse charge – registered', g.T6.rcmReg), row('6O', 'Total of 6B–6H', g.t6total),
+        row('7', 'Credit reversed (debit notes)', g.T7), row('8A', 'Credit as per GSTR-2B', g.in2b),
+        row('9', 'Tax payable', g.pay.payable), row('9', 'Paid through credit', g.pay.itc), row('9', 'Paid in cash', g.pay.cash),
+        [], ['17', 'HSN', 'UQC', 'Rate', 'Quantity', 'Taxable', 'IGST', 'CGST', 'SGST'], ...g.hsn.map(h => ['17', h.hsn, h.uqc, h.rt, h.qty, h.txval, h.iamt, h.camt, h.samt])];
+    return toCSV(rows);
 }
 
 </script>
@@ -2223,7 +2512,8 @@ const MANUAL = [
         <li>Untick <b>Input tax credit eligible</b> for blocked credits (section 17(5): food, motor cars, personal use…); the GST then becomes part of the cost.</li>
         <li><b>TDS</b> fills from the vendor's payment code when the threshold is crossed; the bill shows the TDS and the net payable.</li>
         <li>Attach the bill (photo or PDF) so the original stays with the entry.</li></ol>
-        <h4>Scan a bill</h4><p>Go to <b>Scan a bill</b>, drop a photo or PDF, or take a photo on a phone. The ERP reads the GSTINs, invoice number, date, HSN, taxable value, GST and total. If your GSTIN is the buyer's it prepares a <b>purchase</b>; if you are the seller, a <b>sale</b>. Unknown parties are created from their GSTIN. Check the figures on the next screen and press Save.</p>
+        <h4>Scan bills — posted automatically</h4><p>Go to <b>Scan bills</b> and drop one or many photos or PDFs (or take photos on a phone). For each bill the ERP reads the GSTINs, invoice number, date, HSN, taxable value, GST and total. If your GSTIN is the buyer's it is a <b>purchase</b>; if you are the seller, a <b>sale</b>. Unknown parties are created from their GSTIN.</p>
+        <p>With <b>Post automatically</b> ticked (the default), a bill that reads cleanly — every detail found, GSTINs valid, date not in the future, taxable + GST = total within ₹2, and not already entered — is posted straight away with GST, reverse charge and TDS worked out, the photo attached and the entry flowing into the ledgers, trial balance, P&L, balance sheet, cash flow, GSTR-1/3B and the TDS register. Anything unclear is listed under <b>Needs checking</b>: open it, correct the figures and press Save.</p>
         <div class="man-tip">Clear, flat, well-lit photos read best. Always compare the total with the paper bill before saving. The first scan needs internet to load the reader.</div>
         <div class="man-warn"><b>MSME suppliers:</b> pay within the agreed days, at most 45. Unpaid amounts beyond that are not allowed as an expense until paid. The dashboard and Reports → MSME dues show what is late.</div>`],
     ['money', 'Receipts and payments', `
@@ -2247,16 +2537,35 @@ const MANUAL = [
         <li><b>GSTR-3B</b> shows outward tax, reverse charge, input credit (with credit brought forward) and the set-off in the legal order (IGST credit first). <b>Post set-off journal</b> records the set-off in the books; <b>Pay GST</b> records the cash payment.</li>
         <li>After filing on the portal, press <b>Mark as filed</b> and enter the ARN. The month's entries then lock; later corrections go through notes or GSTR-1A.</li></ol>
         <h4>GSTR-2B and IMS</h4><p>Download GSTR-2B (JSON) from the portal and import it in GST → GSTR-2B / IMS. Each bill shows as Matched, Mismatch, Only in books (credit cannot be claimed yet) or Only in 2B (enter the bill or reject it). Record your IMS decision (accept / reject / pending) on each line.</p>
+        <h4>This month: what to do</h4><p>The first GST tab lists the month's steps in order with the figures and due dates, and advice drawn from your books: invoices still missing from GSTR-1, bills not yet in GSTR-2B (credit held back), bills in 2B that are not in your books, and the cash payable after set-off.</p>
+        <h4>Filing in four clicks</h4><ol><li><b>GSTR-1</b> → <b>Download JSON</b> → on gst.gov.in open GSTR-1 → <i>Prepare offline</i> → upload the file → file with DSC/EVC.</li>
+        <li>Download <b>GSTR-2B</b> JSON from the portal and import it on the GSTR-2B tab. Credit is then claimed only for bills in 2B; for every other row the screen shows what to do (claim, hold, enter the bill, ask the supplier — with a WhatsApp reminder).</li>
+        <li><b>GSTR-3B</b> uses that credit. Compare with the portal's auto-filled 3B, or upload the <b>3B JSON</b>; pay the cash shown, post the set-off and mark filed.</li>
+        <li>Held-back credit is carried forward and claimed automatically in the month the bill appears in 2B.</li></ol>
+        <h4>GSTR-9 annual return</h4><p>GST → <b>GSTR-9 annual</b> builds tables 4–9 and 17 (HSN) from the year's entries and 3B filings: turnover, credit availed by type (inputs, capital goods, services, reverse charge), credit reversed and tax paid. Download the CSV to copy into the offline tool. Turnover above ₹5 crore also needs GSTR-9C (self-certified reconciliation with the audited accounts); the screen shows the difference to explain.</p>
         <div class="man-tip"><b>Quarterly filers (QRMP)</b> and <b>composition dealers</b>: set this in Settings → GST & TDS. The due dates, invoice titles and tax calculation change automatically.</div>`],
     ['tds', 'TDS and TCS', `
         <p>The Income-tax Act 2025 replaced the old sections with <b>payment codes</b> (section 393 for TDS, 394 for TCS). Every screen shows the code with the old section, e.g. <b>1027 (194J(b))</b> for professional fees. The full list with rates and thresholds is in TDS & TCS → Payment codes & rates.</p>
         <ol><li>Set the payment code on each vendor (TDS) or customer (TCS).</li>
         <li>TDS is deducted on bills automatically once the bill or the year's total crosses the threshold, on the value before GST; 20% applies without a PAN.</li>
-        <li>Deposit by the 7th of the next month (March: 30 April) using <b>Pay</b> on the TDS deducted / TCS collected tab, with the challan BSR code and serial number. Late deposit costs 1.5% interest a month or part of a month, shown on the screen.</li>
+        <li>Deposit by the 7th of the next month (March: 30 April). Press <b>Pay</b>: the screen shows the challan exactly as the portal asks for it — TAN, tax year, minor head 200, the amount under each payment code, interest if late — and <b>Open e-Pay Tax</b> takes you to the income-tax e-filing portal to pay (TDS is paid there, not on TRACES). After paying, enter the BSR code, challan serial number and date in <b>Record the challan</b>; the payment is posted and linked to the deductions.</li>
         <li>After each quarter open <b>Quarterly returns</b>, choose Form 140 (TDS) or Form 143 (TCS) and the quarter. Fix every item under <b>Checks before filing</b>.</li>
         <li>Download the deductee / collectee details and challan details, prepare the return in the free Return Preparation Utility, validate it with the File Validation Utility and upload it on the e-filing portal. Then <b>Mark as filed</b> with the token number.</li>
         <li>Download certificates (Form 131 for TDS, Form 133 for TCS) from TRACES and share them.</li></ol>
         <div class="man-warn">Returns are due 31 July, 31 October, 31 January and 31 May. A late return costs ₹200 a day (up to the tax amount); the screen shows the fee so far.</div>`],
+    ['payroll', 'Payroll', `
+        <p><b>Payroll</b> keeps employees and posts salaries to the books, so employee benefit expense in the P&L and salary / PF / ESI / PT / TDS payable in the balance sheet are always right.</p>
+        <ol><li><b>Employees</b>: add each person with monthly gross, basic %, PF and ESI applicability, PAN, UAN and bank details. Employees synced from STAY BAY or Eco Pack appear here automatically.</li>
+        <li><b>Monthly payroll</b>: choose the month, enter loss-of-pay days and advance recovery. The ERP works out PF (12% of basic up to ₹15,000), ESI (0.75% / 3.25% up to ₹21,000 gross), Tamil Nadu professional tax (half-yearly, deducted in September and March) and TDS on salary.</li>
+        <li><b>Post payroll</b> passes one journal: Dr Salaries & wages and employer PF/ESI; Cr PF, ESI, PT and TDS payable, advances, and Salary payable.</li>
+        <li><b>Pay salaries</b> from the bank or cash when you pay; Salary payable becomes nil.</li>
+        <li><b>PF, ESI, PT & TDS</b> shows each month's dues and due dates (PF and ESI by the 15th, TDS by the 7th). Pay them from here; download the PF ECR text file and the Form 138 (old Form 24Q) annexure for the quarterly TDS return on salaries.</li></ol>`],
+    ['connect', 'Connected dashboards (STAY BAY and Eco Pack)', `
+        <p>Go to <b>Connected dashboards</b>. The ERP reads the dashboard's data from the same browser, or from a backup file you load (Backup → Download in the dashboard).</p>
+        <ul style="margin-left:18px"><li><b>STAY BAY</b> — payroll only: employees and every month marked <i>Paid</i> in STAY BAY are posted as payroll journals and salary payments with PF, ESI, PT, TDS and advance recovery.</li>
+        <li><b>Eco Pack</b> — the company profile, products (finished goods) and materials (raw materials) with opening stock, customers, dispatched orders as sales invoices with Eco Pack's own invoice numbers, customer payments as receipts, raw-material purchases as purchase bills, each production day as a production entry (materials consumed → finished goods at cost), paid machine repairs, and payroll.</li></ul>
+        <p>Press <b>Connect & sync</b> once. After that the ERP syncs again whenever you open the company; entries already brought in are never added twice. Each entry is marked with its source and recorded in the audit trail.</p>
+        <div class="man-warn">Eco Pack's stores register does not hold supplier GSTINs. Enter them on the connection card; purchase bills from a supplier are added (with input tax credit) once its GSTIN is known. Use <b>URD</b> for an unregistered supplier.</div>`],
     ['bank', 'Bank reconciliation', `
         <ol><li>Download the bank statement as CSV (Date, Description, Withdrawal, Deposit, Reference) and import it in <b>Bank reconciliation</b>.</li>
         <li>Lines that match an entry by amount within 5 days are matched automatically.</li>
@@ -2327,6 +2636,619 @@ function viewManual() {
 }
 function printManual() {
     printHtml(`<div class="inv"><div class="stmt-title"><b>We Create ERP — User manual</b><span>${APP_VERSION}</span></div>${MANUAL.map(([, t, h], i) => `<h3 style="margin:16px 0 6px">${i + 1}. ${esc(t)}</h3><div style="font-size:12px;line-height:1.5">${h}</div>`).join('')}</div>`);
+}
+
+</script>
+<script>/* js/payroll.js */
+'use strict';
+// ===================== We Create ERP · payroll =====================
+// Employees and a monthly payroll that posts itself to the books:
+//   Dr Salaries & Wages (gross)            Cr PF Payable (employee + employer share)
+//   Dr Employer's PF / ESI contribution    Cr ESI Payable (employee + employer share)
+//                                          Cr Professional Tax Payable · TDS on Salary Payable · Salary Advances
+//                                          Cr Salary Payable (net pay)
+// Paying the salaries clears Salary Payable from the bank; statutory dues are paid from their ledgers.
+// So the Statement of Profit and Loss shows employee benefits expense, and the Balance Sheet shows what is still owed.
+
+const PF_RATE = 12, PF_CEILING = 15000, ESI_EMP = 0.75, ESI_ER = 3.25, ESI_LIMIT = 21000;
+// Tamil Nadu professional tax (Chennai Corporation, revised 2024), per half-year on half-yearly salary
+const TN_PT = [[21000, 0], [30000, 180], [45000, 425], [60000, 930], [75000, 1025], [Infinity, 1250]];
+const ptHalfYear = halfYearSalary => TN_PT.find(([lim]) => halfYearSalary <= lim)[1];
+
+const empById = id => (co.employees || []).find(e => e.id === id);
+const activeEmployees = ym => (co.employees || []).filter(e => (!e.doj || e.doj <= lastDay(ym)) && (!e.exitDate || e.exitDate >= `${ym}-01`) && e.status !== 'Inactive');
+const SOURCE_LABEL = { manual: '', staybay: 'STAY BAY', ecopack: 'Eco Pack' };
+
+function saveEmployee(e) {
+    assertEdit();
+    co.employees ||= [];
+    const E = [];
+    e.name = String(e.name || '').trim();
+    e.pan = String(e.pan || '').toUpperCase().trim();
+    if (!e.name) E.push('Name is required.');
+    if (!(Number(e.salary) >= 0)) E.push('Monthly salary cannot be negative.');
+    if (e.pan && !panValid(e.pan)) E.push('PAN is not valid.');
+    if (e.uan && !/^\d{12}$/.test(e.uan)) E.push('UAN must be 12 digits.');
+    if (e.exitDate && e.doj && e.exitDate < e.doj) E.push('Last working day cannot be before the joining date.');
+    if (e.code && co.employees.some(x => x.id !== e.id && x.code === e.code)) E.push(`Employee code ${e.code} is already used.`);
+    if (E.length) { const er = new Error(E.join('\n')); er.list = E; throw er; }
+    e.salary = r2(e.salary);
+    const old = e.id && empById(e.id);
+    if (old) { audit('Employee edited', { entity: 'Employee', ref: e.name, after: diffFields(old, e, ['name', 'dept', 'desig', 'salary', 'pf', 'esi', 'tdsMonthly', 'status', 'exitDate']) }); Object.assign(old, e); }
+    else {
+        e.id = uid('em');
+        e.code ||= `E${String(co.employees.length + 1).padStart(3, '0')}`;
+        co.employees.push(e);
+        audit('Employee added', { entity: 'Employee', ref: e.name, after: `${e.desig || ''} · ${inr(e.salary)} a month${e.source && e.source !== 'manual' ? ' · from ' + SOURCE_LABEL[e.source] : ''}` });
+    }
+    saveCo();
+    return old || e;
+}
+
+// One employee's pay for a month (days absent without pay = lop)
+function computePayRow(e, ym, lop = 0, adv = 0) {
+    const days = daysIn(ym);
+    const from = e.doj && e.doj > `${ym}-01` ? Number(e.doj.slice(8)) : 1;
+    const to = e.exitDate && e.exitDate < lastDay(ym) ? Number(e.exitDate.slice(8)) : days;
+    const employed = Math.max(0, to - from + 1);
+    const paid = Math.max(0, employed - (Number(lop) || 0));
+    const gross = Math.round((Number(e.salary) || 0) * paid / days);
+    const basic = Math.round(gross * (Number(e.basicPct) || 50) / 100);
+    const pfWage = Math.min(basic, PF_CEILING);
+    const pf = e.pf !== false ? Math.round(pfWage * PF_RATE / 100) : 0;
+    const erPf = pf;
+    const esiOn = e.esi !== false && (Number(e.salary) || 0) <= ESI_LIMIT && gross > 0;
+    const esi = esiOn ? Math.ceil(gross * ESI_EMP / 100) : 0;
+    const erEsi = esiOn ? Math.ceil(gross * ESI_ER / 100) : 0;
+    // Professional tax is due twice a year: deducted with the September and March salaries
+    const pt = gross > 0 && ['09', '03'].includes(ym.slice(5)) ? (e.ptHalf !== undefined && e.ptHalf !== '' ? Number(e.ptHalf) : ptHalfYear((Number(e.salary) || 0) * 6)) : 0;
+    const tds = gross > 0 ? Math.round(Number(e.tdsMonthly) || 0) : 0;
+    adv = Math.min(Math.round(Number(adv) || 0), Math.max(0, gross - pf - esi - pt - tds));
+    const net = gross - pf - esi - pt - tds - adv;
+    return { days, paidDays: paid, lop: Number(lop) || 0, gross, basic, pf, erPf, esi, erEsi, pt, tds, adv, net };
+}
+const runOf = ym => (co.payroll ||= {})[ym];
+function draftRun(ym) {
+    co.payroll ||= {};
+    const run = co.payroll[ym] ||= { status: 'draft', rows: {}, source: 'manual' };
+    if (run.status === 'draft') activeEmployees(ym).forEach(e => {
+        const prev = run.rows[e.id] || {};
+        run.rows[e.id] = computePayRow(e, ym, prev.lop, prev.adv);
+    });
+    return run;
+}
+const runTotals = run => { const T = {}; Object.values(run?.rows || {}).forEach(r => Object.keys(r).forEach(k => { if (typeof r[k] === 'number') T[k] = r2((T[k] || 0) + r[k]); })); return T; };
+
+// Posts the month's payroll as one journal dated the last day of the month
+function postPayroll(ym, opts = {}) {
+    assertEdit();
+    const run = runOf(ym);
+    if (!run || !Object.keys(run.rows).length) throw new Error('There is no payroll for this month.');
+    if (run.jvId && vById(run.jvId)?.status !== 'cancelled') throw new Error('This month is already posted.');
+    const T = runTotals(run);
+    const L = [];
+    const dr = (k, a) => { if (r2(a)) L.push({ acc: sysId(k), dr: r2(a), cr: 0 }); };
+    const cr = (k, a) => { if (r2(a)) L.push({ acc: sysId(k), dr: 0, cr: r2(a) }); };
+    dr('salary', T.gross); dr('erPf', T.erPf); dr('erEsi', T.erEsi);
+    cr('pfPay', (T.pf || 0) + (T.erPf || 0)); cr('esiPay', (T.esi || 0) + (T.erEsi || 0)); cr('ptPay', T.pt); cr('tdsSalPay', T.tds); cr('salAdv', T.adv); cr('salPay', T.net);
+    const date = lastDay(ym) > todayISO() ? todayISO() : lastDay(ym);
+    const jv = saveVoucher({ type: 'JV', date: opts.date || date, jlines: L, narration: `Payroll for ${ymLabel(ym)}: ${Object.keys(run.rows).length} employee(s), gross ${inr(T.gross)}, net ${inr(T.net)}${run.source !== 'manual' ? ` (from ${SOURCE_LABEL[run.source]})` : ''}`, ext: opts.ext }, { source: opts.source || 'Payroll' });
+    Object.assign(run, { status: 'posted', jvId: jv.id, postedOn: todayISO(), postedBy: me?.name });
+    saveCo();
+    return jv;
+}
+function paySalaries(ym, accountId, date, ref, opts = {}) {
+    assertEdit();
+    const run = runOf(ym);
+    if (!run || run.status === 'draft') throw new Error('Post the payroll before paying it.');
+    if (run.payId && vById(run.payId)?.status !== 'cancelled') throw new Error('Salaries for this month are already paid.');
+    const T = runTotals(run);
+    const v = saveVoucher({ type: 'PY', date, accountId, ledgerId: sysId('salPay'), amount: T.net, refNo: ref || '', narration: `Salaries paid for ${ymLabel(ym)}`, ext: opts.ext }, { source: opts.source || 'Payroll' });
+    Object.assign(run, { status: 'paid', payId: v.id, paidOn: date });
+    saveCo();
+    return v;
+}
+function unpostPayroll(ym, reason) {
+    const run = runOf(ym);
+    if (!run) return;
+    if (run.payId && vById(run.payId)?.status !== 'cancelled') throw new Error('Salaries are already paid. Cancel the payment first.');
+    if (run.jvId) cancelVoucher(run.jvId, reason);
+    Object.assign(run, { status: 'draft', jvId: '' });
+    saveCo();
+}
+
+// Statutory dues month by month: what payroll created vs what has been paid
+const STAT = {
+    pf: { ledger: 'pfPay', label: 'PF (EPFO ECR)', due: ym => `${addMonths(ym, 1)}-15`, amt: T => (T.pf || 0) + (T.erPf || 0) },
+    esi: { ledger: 'esiPay', label: 'ESI', due: ym => `${addMonths(ym, 1)}-15`, amt: T => (T.esi || 0) + (T.erEsi || 0) },
+    tds: { ledger: 'tdsSalPay', label: 'TDS on salary (s.392)', due: ym => depositDue(ym), amt: T => T.tds || 0 },
+    pt: { ledger: 'ptPay', label: 'Professional tax', due: ym => ym.endsWith('-09') ? `${ym.slice(0, 4)}-10-31` : ym.endsWith('-03') ? `${ym.slice(0, 4)}-04-30` : '', amt: T => T.pt || 0 }
+};
+function statDues(fy) {
+    const pays = co.vouchers.filter(v => v.type === 'PY' && v.status !== 'cancelled');
+    return fyMonths(fy).flatMap(ym => {
+        const run = runOf(ym);
+        if (!run || run.status === 'draft') return [];
+        const T = runTotals(run);
+        return Object.entries(STAT).map(([k, s]) => {
+            const amount = r2(s.amt(T));
+            if (!amount) return null;
+            const paid = sum(pays.filter(v => v.ledgerId === sysId(s.ledger) && v.taxMonth === ym), 'amount');
+            return { k, ym, label: s.label, amount, paid, due: s.due(ym), pending: r2(amount - paid) };
+        }).filter(Boolean);
+    });
+}
+function payStatutory(k, ym, amount) {
+    F = null;
+    viewVoucherForm({ type: 'PY', ledgerId: sysId(STAT[k].ledger), taxMonth: ym, amount: Math.round(amount), accountId: cashBankAccounts().find(a => a.group === 'bank')?.id || sysId('cash'), narration: `${STAT[k].label} for ${ymLabel(ym)}` });
+    history.replaceState(null, '', '#/new/PY');
+}
+
+// ---------- screens ----------
+let payTab = 'run', payMonth = '';
+function viewPayroll() {
+    co.employees ||= []; co.payroll ||= {};
+    const months = fyMonths(state.fy).filter(m => m <= ymOf(todayISO()) && lastDay(m) >= co.profile.booksFrom);
+    if (!months.includes(payMonth)) payMonth = months.at(-1) || ymOf(todayISO());
+    const tabs = [['run', 'Monthly payroll'], ['emp', `Employees (${co.employees.filter(e => e.status !== 'Inactive').length})`], ['stat', 'PF, ESI, PT & TDS'], ['link', 'Connected dashboards']];
+    const head = pageHead('Payroll', 'Add employees once; each month the payroll works out PF, ESI, professional tax and TDS, posts salary and employer contributions to the books, and records the payment. Employee benefits expense flows into the Profit and Loss, and unpaid salary and dues into the Balance Sheet.')
+        + `<div class="tabs">${tabs.map(([k, l]) => `<button class="${payTab === k ? 'on' : ''}" onclick="payTab='${k}';route()">${l}</button>`).join('')}</div>`;
+    let body = '';
+    if (payTab === 'emp') {
+        const list = co.employees.slice().sort((a, b) => (a.status === 'Inactive') - (b.status === 'Inactive') || a.name.localeCompare(b.name));
+        body = `<div class="card"><div class="row" style="justify-content:space-between;margin-bottom:12px"><input placeholder="Filter" oninput="filterRows(this,'#emT')" style="flex:1;max-width:320px">${canEdit() ? '<button class="btn btn-p" onclick="employeeForm()">+ Add employee</button>' : ''}</div>
+            <div class="tw"><table class="t" id="emT"><thead><tr><th>Employee</th><th class="hide-m">Department</th><th class="n">Monthly salary</th><th class="hide-m">PF / ESI</th><th class="hide-m">Joined</th><th>Status</th><th></th></tr></thead><tbody>
+            ${list.map(e => `<tr><td><b>${esc(e.name)}</b><div class="note">${esc(e.code)} · ${esc(e.desig || '')}${e.source && e.source !== 'manual' ? ` <span class="badge info">${SOURCE_LABEL[e.source]}</span>` : ''}</div></td><td class="hide-m">${esc(e.dept || '')}</td><td class="n">${num(e.salary)}</td><td class="hide-m">${e.pf !== false ? 'PF' : '—'} · ${e.esi !== false && e.salary <= ESI_LIMIT ? 'ESI' : '—'}</td><td class="hide-m">${fmtDate(e.doj)}</td><td><span class="badge ${e.status === 'Inactive' || e.exitDate ? '' : 'good'}">${e.exitDate ? 'Left ' + fmtDate(e.exitDate) : e.status || 'Active'}</span></td><td>${canEdit() ? `<button class="link" onclick="employeeForm('${e.id}')">Edit</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="7" class="muted" style="text-align:center;padding:20px">No employees yet. Add them here, or connect STAY BAY / Eco Pack.</td></tr>'}
+            </tbody></table></div></div>`;
+    } else if (payTab === 'stat') {
+        const dues = statDues(state.fy);
+        body = `<div class="card"><h2>Statutory dues from payroll · FY ${fyLabel(state.fy)}</h2><div class="tw"><table class="t"><thead><tr><th>Month</th><th>Due</th><th class="n">Amount</th><th class="n">Paid</th><th>Due by</th><th></th></tr></thead><tbody>
+            ${dues.map(d => `<tr><td>${ymLabel(d.ym)}</td><td>${esc(d.label)}</td>${amtCell(d.amount)}${amtCell(d.paid)}<td>${d.due ? fmtDate(d.due) : '—'} ${d.pending > 0.5 && d.due && d.due < todayISO() ? '<span class="badge bad">overdue</span>' : d.pending <= 0.5 ? '<span class="badge good">paid</span>' : ''}</td><td>${d.pending > 0.5 && canEdit() ? `<button class="btn btn-s btn-sm" onclick="payStatutory('${d.k}','${d.ym}',${d.pending})">Pay ${inr0(d.pending)}</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="6" class="muted" style="text-align:center;padding:20px">Post a payroll to see its dues.</td></tr>'}
+            </tbody></table></div>
+            <p class="note" style="margin-top:8px">PF: pay through the EPFO Unified Portal (ECR) by the 15th. ESI: ESIC portal by the 15th. TDS on salary: by the 7th (March: 30 April), quarterly return Form 138 (old 24Q). Tamil Nadu professional tax: twice a year with the September and March salaries.</p>
+            <div class="row" style="margin-top:10px">${['Q1', 'Q2', 'Q3', 'Q4'].map(q => `<button class="btn btn-s btn-sm" onclick="download('Form138_${q}_TY${fyLabel(state.fy)}.csv','\\ufeff'+form138Csv(${state.fy},'${q}'),'text/csv')">${ic('dl')} Form 138 ${q}</button>`).join('')}<button class="btn btn-s btn-sm" onclick="download('ECR_${payMonth}.txt', ecrText('${payMonth}'), 'text/plain')">${ic('dl')} PF ECR file · ${ymLabel(payMonth)}</button></div></div>`;
+    } else if (payTab === 'link') {
+        body = connectionsHtml();
+    } else {
+        const run = runOf(payMonth);
+        const draft = !run || run.status === 'draft';
+        const r = draft && canEdit() ? draftRun(payMonth) : run;
+        const rows = Object.entries(r?.rows || {}).map(([id, x]) => ({ e: empById(id), x })).filter(z => z.e);
+        const T = runTotals(r);
+        const steps = [['draft', 'Prepare'], ['posted', 'Posted to books'], ['paid', 'Salaries paid']];
+        const at = steps.findIndex(s => s[0] === (r?.status || 'draft'));
+        body = `<div class="card"><div class="row" style="justify-content:space-between"><div class="row"><select onchange="payMonth=this.value;route()">${months.map(m => opt(m, ymLabel(m), payMonth)).join('')}</select>
+            ${steps.map((s, i) => `<span class="badge ${i < at ? 'good' : i === at ? 'brand' : ''}">${i + 1}. ${s[1]}</span>`).join('')}${r?.source && r.source !== 'manual' ? `<span class="badge info">From ${SOURCE_LABEL[r.source]}</span>` : ''}</div>
+            <div class="row">${canEdit() && rows.length ? (draft ? `<button class="btn btn-p" onclick="doPostPayroll('${payMonth}')">Post payroll to books</button>` : r.status === 'posted' ? `<button class="btn btn-g btn-sm" onclick="doUnpost('${payMonth}')">Re-open</button><button class="btn btn-p" onclick="doPaySalaries('${payMonth}')">Pay salaries ${inr0(T.net)}</button>` : `<a class="btn btn-s btn-sm" href="#/v/${r.payId}">Payment ${esc(vById(r.payId)?.no || '')}</a>`) : ''}${r?.jvId ? `<a class="btn btn-s btn-sm" href="#/v/${r.jvId}">Journal ${esc(vById(r.jvId)?.no || '')}</a>` : ''}</div></div></div>
+            <div class="grid g4" style="margin-bottom:14px">${[['Gross salary', T.gross, '#4338ca'], ['Employee deductions', (T.pf || 0) + (T.esi || 0) + (T.pt || 0) + (T.tds || 0) + (T.adv || 0), '#c62828'], ['Net pay', T.net, '#0f9d63'], ['Employer PF + ESI', (T.erPf || 0) + (T.erEsi || 0), '#b45309']].map(([l, v, c]) => `<div class="kpi" style="--c:${c}"><div class="v">${inr0(v || 0)}</div><div class="l">${l}</div></div>`).join('')}</div>
+            <div class="card"><div class="tw"><table class="t" id="prT"><thead><tr><th>Employee</th><th class="n">Days paid</th><th class="n">LOP days</th><th class="n">Gross</th><th class="n hide-m">PF</th><th class="n hide-m">ESI</th><th class="n hide-m">PT</th><th class="n hide-m">TDS</th><th class="n">Advance</th><th class="n">Net pay</th><th class="n hide-m">Employer PF+ESI</th></tr></thead><tbody>
+            ${rows.map(({ e, x }) => `<tr><td><b>${esc(e.name)}</b><div class="note">${esc(e.desig || e.dept || '')}</div></td><td class="n">${x.paidDays ?? '—'}</td><td class="n">${draft && canEdit() ? `<input type="number" min="0" max="31" step="0.5" value="${x.lop || 0}" style="width:72px" onchange="setPayInput('${payMonth}','${e.id}','lop',this.value)">` : (x.lop || 0)}</td>${amtCell(x.gross)}<td class="n hide-m">${num(x.pf)}</td><td class="n hide-m">${num(x.esi)}</td><td class="n hide-m">${num(x.pt)}</td><td class="n hide-m">${num(x.tds)}</td><td class="n">${draft && canEdit() ? `<input type="number" min="0" step="100" value="${x.adv || 0}" style="width:90px" onchange="setPayInput('${payMonth}','${e.id}','adv',this.value)">` : num(x.adv || 0)}</td><td class="n"><b>${num(x.net)}</b></td><td class="n hide-m">${num((x.erPf || 0) + (x.erEsi || 0))}</td></tr>`).join('') || '<tr><td colspan="11" class="muted" style="text-align:center;padding:20px">No employees for this month. Add employees or connect a dashboard.</td></tr>'}
+            </tbody>${rows.length ? `<tfoot><tr><td>Total (${rows.length})</td><td></td><td></td>${amtCell(T.gross)}<td class="n hide-m">${num(T.pf)}</td><td class="n hide-m">${num(T.esi)}</td><td class="n hide-m">${num(T.pt)}</td><td class="n hide-m">${num(T.tds)}</td>${amtCell(T.adv)}<td class="n">${num(T.net)}</td><td class="n hide-m">${num((T.erPf || 0) + (T.erEsi || 0))}</td></tr></tfoot>` : ''}</table></div>
+            <p class="note" style="margin-top:8px">PF 12% of basic (capped at ₹15,000) from employee and employer; ESI 0.75% + 3.25% for salaries up to ₹21,000; Tamil Nadu professional tax with the September and March salaries; TDS as set on each employee. "Advance" recovers a salary advance (pay advances to the ledger "Salary Advances to Staff").</p></div>`;
+    }
+    $('#view').innerHTML = head + body;
+}
+function setPayInput(ym, id, k, v) {
+    const run = draftRun(ym);
+    const prev = run.rows[id] || {};
+    prev[k] = Number(v) || 0;
+    run.rows[id] = computePayRow(empById(id), ym, prev.lop, prev.adv);
+    saveCo(); route();
+}
+function doPostPayroll(ym) {
+    try { draftRun(ym); const jv = postPayroll(ym); toast(`Payroll posted as ${jv.no}.`); route(); } catch (e) { alert(e.message); }
+}
+async function doUnpost(ym) {
+    const reason = await ask({ title: 'Re-open payroll', message: `Cancel the journal for ${ymLabel(ym)} so the figures can be changed?`, input: 'Reason', ok: 'Re-open' });
+    if (reason === null) return;
+    try { unpostPayroll(ym, reason); route(); } catch (e) { alert(e.message); }
+}
+function doPaySalaries(ym) {
+    const T = runTotals(runOf(ym));
+    modal({
+        title: `Pay salaries · ${ymLabel(ym)}`,
+        body: `<div id="psErr"></div><p style="margin-bottom:12px">Net pay <b>${inr(T.net)}</b> to ${Object.keys(runOf(ym).rows).length} employee(s).</p><div class="fg"><label class="f">Paid from<select id="ps_acc">${cashBankAccounts().map(a => opt(a.id, a.name, cashBankAccounts().find(x => x.group === 'bank')?.id)).join('')}</select></label><label class="f">Date<input id="ps_date" type="date" value="${todayISO() < lastDay(ym) ? todayISO() : (ym < ymOf(todayISO()) ? `${addMonths(ym, 1)}-01` : todayISO())}"></label><label class="f">Reference (bulk transfer / UTR)<input id="ps_ref"></label></div>`,
+        foot: `<button class="btn btn-s" onclick="closeModal()">Cancel</button><button class="btn btn-p" id="psOk">Record payment</button>`,
+        onOpen: () => $('#psOk').onclick = () => { try { const v = paySalaries(ym, val('ps_acc'), val('ps_date'), val('ps_ref')); closeModal(); toast(`Salaries paid (${v.no}).`); route(); } catch (e) { showErr('#psErr', e); } }
+    });
+}
+function employeeForm(id) {
+    const e = id ? { ...empById(id) } : { pf: true, esi: true, basicPct: 50, status: 'Active', doj: todayISO(), source: 'manual' };
+    const linked = e.source && e.source !== 'manual';
+    modal({
+        title: id ? `Edit ${e.name}` : 'Add employee', wide: true,
+        body: `<div id="emErr"></div>${linked ? `<div class="warns" style="background:var(--info-soft);color:var(--info)">Comes from ${SOURCE_LABEL[e.source]}. Changes there come across on the next sync; payroll for months paid there is imported as paid.</div>` : ''}<div class="fg">
+            <label class="f">Name *<input id="em_name" value="${esc(e.name)}"></label><label class="f">Employee code<input id="em_code" value="${esc(e.code)}"></label>
+            <label class="f">Department<input id="em_dept" value="${esc(e.dept)}"></label><label class="f">Designation<input id="em_desig" value="${esc(e.desig)}"></label>
+            <label class="f">Monthly gross salary (₹) *<input id="em_sal" type="number" min="0" step="100" value="${e.salary ?? ''}"></label><label class="f">Basic (% of gross)<input id="em_basic" type="number" min="1" max="100" value="${e.basicPct || 50}"></label>
+            <label class="f">Joining date<input id="em_doj" type="date" value="${esc(e.doj)}"></label><label class="f">Last working day<input id="em_exit" type="date" value="${esc(e.exitDate)}"></label>
+            <label class="f">PAN<input id="em_pan" maxlength="10" style="text-transform:uppercase" value="${esc(e.pan)}"></label><label class="f">UAN (PF)<input id="em_uan" maxlength="12" inputmode="numeric" value="${esc(e.uan)}"></label>
+            <label class="f">ESI IP number<input id="em_esino" value="${esc(e.esiNo)}"></label><label class="f">TDS per month (₹) <span class="hint">From the employee's projected tax</span><input id="em_tds" type="number" min="0" value="${e.tdsMonthly || 0}"></label>
+            <label class="f">Professional tax per half-year (₹) <span class="hint">Blank = Tamil Nadu slab</span><input id="em_pt" type="number" min="0" value="${e.ptHalf ?? ''}"></label>
+            <label class="f">Bank account<input id="em_bank" value="${esc(e.bankAcc)}"></label>
+            <label class="chk"><input type="checkbox" id="em_pf" ${e.pf !== false ? 'checked' : ''}> PF applies</label><label class="chk"><input type="checkbox" id="em_esi" ${e.esi !== false ? 'checked' : ''}> ESI applies (salary up to ₹21,000)</label>
+            <label class="chk"><input type="checkbox" id="em_inact" ${e.status === 'Inactive' ? 'checked' : ''}> Inactive (not in payroll)</label></div>`,
+        foot: `<button class="btn btn-s" onclick="closeModal()">Cancel</button><button class="btn btn-p" id="emOk">Save</button>`,
+        onOpen: () => $('#emOk').onclick = () => {
+            try { saveEmployee({ ...e, name: val('em_name'), code: val('em_code'), dept: val('em_dept'), desig: val('em_desig'), salary: numv('em_sal'), basicPct: numv('em_basic') || 50, doj: val('em_doj'), exitDate: val('em_exit'), pan: val('em_pan'), uan: val('em_uan'), esiNo: val('em_esino'), tdsMonthly: numv('em_tds'), ptHalf: val('em_pt') === '' ? undefined : numv('em_pt'), bankAcc: val('em_bank'), pf: chk('em_pf'), esi: chk('em_esi'), status: chk('em_inact') ? 'Inactive' : 'Active' }); closeModal(); route(); toast('Employee saved.'); }
+            catch (err) { showErr('#emErr', err); }
+        }
+    });
+}
+// Form 138 (old 24Q) data: salary paid and TDS per employee for the quarter
+function form138Csv(fy, q) {
+    const months = QUARTERS[q].map(m => `${m >= 4 ? fy : fy + 1}-${String(m).padStart(2, '0')}`);
+    const rows = [];
+    months.forEach(ym => { const run = runOf(ym); if (!run || run.status === 'draft') return; Object.entries(run.rows).forEach(([id, r]) => { const e = empById(id); if (e && (r.tds || r.gross)) rows.push([e.pan || 'PANNOTAVBL', e.name, e.code, ymLabel(ym), r.gross, r.tds]); }); });
+    return toCSV([['Employee PAN', 'Name', 'Code', 'Month', 'Salary paid', 'TDS (s.392)'], ...rows]);
+}
+// EPFO ECR text file: UAN#~#Name#~#Gross#~#EPF wages#~#EPS wages#~#EDLI wages#~#EE share#~#EPS#~#ER diff#~#NCP days#~#Refund
+function ecrText(ym) {
+    const run = runOf(ym);
+    if (!run) return '';
+    return Object.entries(run.rows).map(([id, r]) => {
+        const e = empById(id);
+        if (!e || !r.pf) return null;
+        const wage = Math.min(r.basic || 0, PF_CEILING), eps = Math.round(wage * 8.33 / 100);
+        return [e.uan || '000000000000', e.name.toUpperCase(), r.gross, r.basic, wage, wage, r.pf, eps, r.erPf - eps, Math.round(r.lop || 0), 0].join('#~#');
+    }).filter(Boolean).join('\n');
+}
+
+</script>
+<script>/* js/connect.js */
+'use strict';
+// ===================== We Create ERP · connected dashboards =====================
+// STAY BAY (hotel HR dashboard): payroll only — employees and every month paid there.
+// Eco Pack (factory dashboard): customers, products, raw materials, opening stock, sales invoices and receipts,
+// raw-material purchase bills, monthly production (materials consumed → finished goods), machine repairs and payroll.
+// The dashboards save in the same browser storage when used on the same site (vigneshannamalai-ai.github.io) or as
+// local files in the same browser, so the ERP can read them directly; a backup file from either works anywhere.
+// Each imported record carries an "ext" key, so syncing again only adds what is new.
+
+const SOURCES = {
+    staybay: { name: 'STAY BAY Business Hotels', what: 'Payroll: employees and every salary month paid in the STAY BAY dashboard.', url: 'https://vigneshannamalai-ai.github.io/STAY-BAY-BUSINESS-HOTELS/' },
+    ecopack: { name: 'Eco Pack Private Limited', what: 'Customers, products, raw materials, opening stock, sales invoices and receipts, purchase bills, daily production, machine repairs and payroll.', url: 'https://vigneshannamalai-ai.github.io/Eco-Pack-Dashboard/' }
+};
+const linkOf = k => (co.links ||= {})[k];
+let pendingSource = {};   // data read from a backup file this session, per source
+
+// ---------- reading the source data ----------
+function readStayBay() {
+    if (pendingSource.staybay) return pendingSource.staybay;
+    try {
+        const raw = localStorage.getItem('staybay.employees.v2');
+        if (!raw) return null;
+        return { employees: JSON.parse(raw), employer: JSON.parse(localStorage.getItem('staybay.employer.v1') || '{}'), from: 'this browser' };
+    } catch (e) { return null; }
+}
+function readEcoPack() {
+    if (pendingSource.ecopack) return pendingSource.ecopack;
+    try {
+        const raw = localStorage.getItem('ecopack.db.v1');
+        return raw ? { db: JSON.parse(raw), from: 'this browser' } : null;
+    } catch (e) { return null; }
+}
+function loadSourceFile(k, text) {
+    const j = JSON.parse(text);
+    if (k === 'staybay') {
+        if (j.app !== 'staybay-hr' || !j.keys?.['staybay.employees.v2']) throw new Error('This is not a STAY BAY backup file.');
+        pendingSource.staybay = { employees: JSON.parse(j.keys['staybay.employees.v2']), employer: JSON.parse(j.keys['staybay.employer.v1'] || '{}'), from: `backup of ${fmtDate((j.exportedAt || '').slice(0, 10))}` };
+    } else {
+        if (j.app !== 'ecopack-dashboard' || !j.db) throw new Error('This is not an Eco Pack backup file.');
+        pendingSource.ecopack = { db: j.db, from: `backup of ${fmtDate((j.exportedAt || '').slice(0, 10))}` };
+    }
+    return pendingSource[k];
+}
+
+// ---------- shared helpers ----------
+const stateCodeByName = name => {
+    const n = String(name || '').toLowerCase().trim();
+    return Object.keys(STATES).find(c => STATES[c].toLowerCase() === n) || '';
+};
+function newReport() { return { added: {}, skipped: 0, failed: [], needs: [] }; }
+const bump = (rep, k, n = 1) => { rep.added[k] = (rep.added[k] || 0) + n; };
+const hasExt = ext => co.vouchers.some(v => v.ext === ext && v.status !== 'cancelled');
+function tryPost(rep, label, fn) {
+    try { fn(); return true; } catch (e) { rep.failed.push(`${label}: ${e.message.split('\n')[0]}`); return false; }
+}
+function bankFor(link) {
+    let id = link.bank && accById(link.bank) ? link.bank : cashBankAccounts().find(a => a.group === 'bank')?.id;
+    if (!id) id = saveAccount({ name: 'Bank Account', group: 'bank', openDr: 0, openCr: 0 }).id;
+    link.bank = id;
+    return id;
+}
+// A payroll month from a dashboard: rows already worked out and paid there
+function importPayrollMonth(rep, src, ym, rows, paidOn, bank) {
+    if (ym < ymOf(co.profile.booksFrom) || !Object.keys(rows).length) return;
+    const run = runOf(ym);
+    if (run && run.source === src && run.status !== 'draft') { rep.skipped++; return; }
+    if (run && run.status !== 'draft') { rep.failed.push(`${ymLabel(ym)} payroll: already posted in the ERP by hand, so the ${SOURCE_LABEL[src]} figures were not added.`); return; }
+    co.payroll[ym] = { status: 'draft', rows, source: src };
+    if (!tryPost(rep, `${ymLabel(ym)} payroll`, () => postPayroll(ym, { ext: `${src}:payroll:${ym}`, source: `${SOURCE_LABEL[src]} sync` }))) { delete co.payroll[ym]; return; }
+    bump(rep, 'payroll months');
+    if (paidOn && paidOn <= todayISO()) tryPost(rep, `${ymLabel(ym)} salary payment`, () => paySalaries(ym, bank, paidOn < lastDay(ym) ? lastDay(ym) > todayISO() ? todayISO() : lastDay(ym) : paidOn, `${SOURCE_LABEL[src]} payroll`, { ext: `${src}:salpay:${ym}`, source: `${SOURCE_LABEL[src]} sync` }));
+}
+function upsertEmployee(rep, src, srcId, data) {
+    co.employees ||= [];
+    const ex = co.employees.find(e => e.source === src && e.srcId === srcId);
+    if (ex) { const before = JSON.stringify(ex); Object.assign(ex, data); if (JSON.stringify(ex) !== before) bump(rep, 'employees updated'); return ex; }
+    const e = { id: uid('em'), source: src, srcId, ...data };
+    co.employees.push(e);
+    bump(rep, 'employees');
+    return e;
+}
+
+// ---------- STAY BAY: payroll ----------
+function syncStayBay(source) {
+    assertEdit();
+    const S = source || readStayBay();
+    if (!S) throw new Error('No STAY BAY data found. Open the STAY BAY dashboard in this browser first, or load its backup file.');
+    const link = co.links.staybay ||= { auto: true };
+    const rep = newReport();
+    inBulk(() => {
+        const bank = bankFor(link);
+        co.payroll ||= {};
+        const byMonth = {};
+        S.employees.forEach(se => {
+            const c = se.salaryConfig || {};
+            const e = upsertEmployee(rep, 'staybay', se.id, {
+                code: se.code || '', name: se.name, dept: se.department || '', desig: se.designation || '', salary: Number(se.salary) || 0, basicPct: Number(c.basicPct) || 50,
+                doj: se.doj || '', exitDate: se.exitDate || '', status: se.status === 'Active' || !se.status ? 'Active' : 'Inactive', pan: se.pan || '', uan: /^\d{12}$/.test(se.epf || '') ? se.epf : '', esiNo: se.esi || '',
+                pf: c.pfEnabled !== false, esi: c.esiEnabled !== false, bankAcc: se.bank?.accountNumber || ''
+            });
+            Object.entries(se.payments || {}).forEach(([ym, p]) => {
+                const s = p.snapshot || {};
+                const gross = Math.round(s.earnedGross ?? ((s.gross || 0) - (s.lop || 0)));
+                const M = byMonth[ym] ||= { rows: {}, paidOn: '' };
+                M.rows[e.id] = { paidDays: s.paidDays, lop: s.lopDays || 0, gross, basic: Math.round(s.earnedBasic ?? s.basic ?? 0), pf: s.pf || 0, erPf: s.employerPf || 0, esi: s.esi || 0, erEsi: s.employerEsi || 0, pt: s.pt || 0, tds: s.tds || 0, adv: (s.advance || 0) + (s.loan || 0), net: s.net ?? gross };
+                // Balance the row exactly to what was paid (STAY BAY rounds the net pay)
+                const r = M.rows[e.id];
+                r.gross = r2(r.net + r.pf + r.esi + r.pt + r.tds + r.adv);
+                if (p.paidOn > M.paidOn) M.paidOn = p.paidOn;
+            });
+        });
+        Object.keys(byMonth).sort().forEach(ym => importPayrollMonth(rep, 'staybay', ym, byMonth[ym].rows, byMonth[ym].paidOn, bank));
+        link.lastSync = new Date().toISOString(); link.from = S.from;
+    });
+    audit('Synced from STAY BAY', { entity: 'Connection', ref: 'STAY BAY', after: reportText(rep) });
+    saveCo();
+    return rep;
+}
+
+// ---------- Eco Pack: sales, purchases, production, repairs, payroll ----------
+// 4-digit HSN in the dashboard → 6 digits (needed above ₹5 crore turnover). Check these against your invoices.
+const ECO_HSN = {
+    bubble: '392010', tube: '392010', stretch: '392010', hmroll: '392010', bubbag: '392321', ldbag: '392321', shop: '392321', garb: '392321', garbroll: '392321',
+    cap: '392350', tub: '392390', bottle: '392330', ldpe: '390110', lldpe: '390140', hdpe: '390120', hm: '390120', pp: '390210', rec: '390190', mbb: '320649', mbc: '320649'
+};
+function syncEcoPack(source) {
+    assertEdit();
+    const S = source || readEcoPack();
+    if (!S) throw new Error('No Eco Pack data found. Open the Eco Pack dashboard in this browser first, or load its backup file.');
+    const d = S.db;
+    const link = co.links.ecopack ||= { auto: true, vendorGstin: {} };
+    link.vendorGstin ||= {};
+    const rep = newReport();
+    const today = todayISO();
+    inBulk(() => {
+        const bank = bankFor(link);
+        // Company details, first time only
+        if (!link.lastSync && d.company) {
+            const c = d.company;
+            Object.assign(co.profile, { legalName: co.profile.legalName || c.name, gstin: co.profile.gstin || c.gstin || '', state: c.stateCode || co.profile.state, address: co.profile.address || c.address || '' });
+            if (co.profile.gstin && !gstinValid(co.profile.gstin)) co.profile.gstin = '';
+        }
+        // Items: finished goods and raw materials, each a stock item with its kind
+        const itemFor = {};
+        const ensureItem = (src, kind, x) => {
+            let it = co.items.find(i => i.srcId === `ecopack:${src}:${x.id}`);
+            if (!it) {
+                it = saveItem({ name: co.items.some(i => i.name.toLowerCase() === x.name.toLowerCase()) ? `${x.name} (Eco Pack)` : x.name, type: 'goods', kind, hsn: ECO_HSN[x.id] || (x.hsn ? String(x.hsn).padEnd(6, '0') : '390190'), gstRate: 18, unit: x.unit === 'pcs' ? 'PCS' : 'KGS', rate: kind === 'finished' ? Number(x.rate) || 0 : 0, purchaseRate: kind === 'raw' ? Number(x.rate) || 0 : 0, trackStock: true, openQty: 0, openValue: 0, srcId: `ecopack:${src}:${x.id}` });
+                bump(rep, 'items');
+            }
+            itemFor[`${src}:${x.id}`] = it;
+        };
+        (d.products || []).forEach(p => ensureItem('fg', 'finished', p));
+        (d.materials || []).forEach(m => ensureItem('rm', 'raw', m));
+        // Opening stock (only before any stock entry exists, so books stay consistent)
+        if (!link.openingDone) {
+            (d.moves || []).filter(mv => mv.kind === 'Opening').forEach(mv => {
+                const it = itemFor[`${mv.type === 'rm' ? 'rm' : 'fg'}:${mv.item}`];
+                if (it) { it.openQty = r2((Number(it.openQty) || 0) + mv.qty); it.openValue = r2((Number(it.openValue) || 0) + mv.qty * (Number(mv.rate) || 0)); }
+            });
+            const ov = sum((d.moves || []).filter(mv => mv.kind === 'Opening'), mv => mv.qty * (Number(mv.rate) || 0));
+            if (ov) { const cap = sysAcc('capital'); cap.openCr = r2((Number(cap.openCr) || 0) + ov); }   // balances the opening stock
+            link.openingDone = true;
+        }
+        // Customers
+        const custFor = {};
+        (d.customers || []).forEach(c => {
+            let ct = co.contacts.find(x => x.srcId === `ecopack:cust:${c.id}`);
+            if (!ct) {
+                const gst = c.gstin && gstinValid(String(c.gstin).toUpperCase()) ? String(c.gstin).toUpperCase() : '';
+                ct = saveContact({ type: 'customer', name: co.contacts.some(x => x.name.toLowerCase() === c.name.toLowerCase()) ? `${c.name} (Eco Pack)` : c.name, gstin: gst, state: gst ? gst.slice(0, 2) : (stateCodeByName(c.state) || companyState()), city: c.city || '', phone: /^[6-9]\d{9}$/.test(c.phone || '') ? c.phone : '', creditDays: Number(c.creditDays) || 30, srcId: `ecopack:cust:${c.id}` });
+                bump(rep, 'customers');
+            }
+            custFor[c.id] = ct;
+        });
+        // Vendors from purchase entries. GST can only be claimed from a registered supplier, so a GSTIN is needed.
+        const purchases = (d.moves || []).filter(mv => mv.kind === 'Purchase' && mv.type === 'rm');
+        const vendorNames = [...new Set(purchases.map(mv => mv.party || 'Supplier'))];
+        const vendFor = {};
+        vendorNames.forEach(name => {
+            const gst = link.vendorGstin[name];
+            let ct = co.contacts.find(x => x.srcId === `ecopack:vend:${name}`);
+            if (!ct && gst) { ct = saveContact({ type: 'vendor', name, gstin: gst === 'URD' ? '' : gst, state: gst === 'URD' ? companyState() : gst.slice(0, 2), creditDays: 30, srcId: `ecopack:vend:${name}` }); bump(rep, 'suppliers'); }
+            if (ct && gst && gst !== 'URD' && ct.gstin !== gst) { ct.gstin = gst; ct.state = gst.slice(0, 2); }
+            if (!gst) rep.needs.push({ kind: 'vendorGstin', name, bills: purchases.filter(mv => (mv.party || 'Supplier') === name).length });
+            vendFor[name] = ct;
+        });
+        // All documents in date order, so stock and settlements happen in the right sequence
+        const docs = [];
+        (d.orders || []).filter(o => o.status === 'Dispatched' && o.dispatch?.invoiceNo && o.dispatch.date <= today).forEach(o => docs.push({ date: o.dispatch.date, k: 0, o }));
+        const bills = {};
+        purchases.forEach(mv => { const key = mv.bill || `${mv.party}|${mv.date}`; (bills[key] ||= []).push(mv); });
+        Object.entries(bills).forEach(([key, mvs]) => docs.push({ date: mvs[0].date, k: 1, key, mvs }));
+        // one production entry per production day (before today), so finished goods are in stock before they are sold
+        const doneDays = new Set();
+        (d.production || []).forEach(r => { if (r.date < today) doneDays.add(r.date); });
+        doneDays.forEach(day => docs.push({ date: day, k: 2, day }));
+        (d.maintenance || []).filter(m => Number(m.cost) > 0 && (m.status || 'Closed') !== 'Open' && m.date <= today).forEach(m => docs.push({ date: m.closedOn && m.closedOn <= today ? m.closedOn : m.date, k: 3, m }));
+        docs.sort((a, b) => a.date.localeCompare(b.date) || (a.k === 2 ? -1 : a.k) - (b.k === 2 ? -1 : b.k));
+        const inBooks = date => date >= co.profile.booksFrom;
+        docs.forEach((x, n) => {
+            const created = new Date(Date.parse(x.date) + n).toISOString();
+            if (!inBooks(x.date)) return;
+            if (x.k === 0) {
+                const o = x.o, ext = `ecopack:inv:${o.id}`;
+                if (hasExt(ext)) { rep.skipped++; return; }
+                const it = itemFor[`fg:${o.productId}`], ct = custFor[o.customerId];
+                if (!it || !ct) return;
+                const ok = tryPost(rep, `Invoice ${o.dispatch.invoiceNo}`, () => {
+                    const v = saveVoucher({ type: 'SI', no: o.dispatch.invoiceNo, date: o.dispatch.date, partyId: ct.id, pos: ct.state === '96' ? '96' : ct.state, ext, narration: `Eco Pack order ${o.no}${o.dispatch.vehicle ? ' · vehicle ' + o.dispatch.vehicle : ''}`, lines: [{ itemId: it.id, desc: it.name, hsn: it.hsn, qty: o.qty, unit: it.unit, rate: o.rate, disc: 0, gstRate: 18, accId: '' }] }, { keepNo: true, source: 'Eco Pack sync', created });
+                    bump(rep, 'sales invoices');
+                    (o.payments || []).forEach((p, i) => {
+                        if (!p.date || p.date > today || hasExt(`${ext}:rc${i}`)) return;
+                        const due = outstanding(v);
+                        tryPost(rep, `Receipt for ${v.no}`, () => { saveVoucher({ type: 'RC', date: p.date < v.date ? v.date : p.date, accountId: bank, partyId: ct.id, amount: p.amount, refNo: p.ref || p.mode || '', alloc: due > 0 ? [{ vid: v.id, amt: Math.min(due, p.amount) }] : [], ext: `${ext}:rc${i}`, narration: `Received by ${p.mode || 'bank'} against ${v.no}` }, { source: 'Eco Pack sync', created }); bump(rep, 'receipts'); });
+                    });
+                });
+                if (!ok) return;
+            } else if (x.k === 1) {
+                const ext = `ecopack:bill:${x.key}`, ct = vendFor[x.mvs[0].party || 'Supplier'];
+                if (hasExt(ext)) { rep.skipped++; return; }
+                if (!ct) return;   // waiting for the supplier's GSTIN
+                tryPost(rep, `Purchase ${x.key}`, () => {
+                    saveVoucher({ type: 'PB', date: x.date, partyId: ct.id, refNo: String(x.mvs[0].bill || `EP-${x.date}`).slice(0, 16), ext, narration: 'Raw material purchase from the Eco Pack stores register', lines: x.mvs.map(mv => { const it = itemFor[`rm:${mv.item}`]; return { itemId: it.id, desc: it.name, hsn: it.hsn, qty: mv.qty, unit: it.unit, rate: mv.rate, disc: 0, gstRate: 18, accId: '' }; }) }, { source: 'Eco Pack sync', created });
+                    bump(rep, 'purchase bills');
+                });
+            } else if (x.k === 2) {
+                const ext = `ecopack:prod:${x.day}`;
+                if (hasExt(ext) || hasExt(`ecopack:prod:${x.day.slice(0, 7)}`)) { rep.skipped++; return; }
+                const consume = {}, produce = {};
+                (d.production || []).filter(r => r.date === x.day).forEach(r => {
+                    const p = (d.products || []).find(q => q.id === r.productId);
+                    if (!p) return;
+                    produce[p.id] = (produce[p.id] || 0) + r.qty;
+                    const used = r.qty * (Number(p.wt) || 1) + (Number(r.scrap) || 0);
+                    Object.entries(p.recipe || {}).forEach(([m, share]) => { consume[m] = (consume[m] || 0) + used * share; });
+                });
+                const C = Object.entries(consume).map(([m, q]) => ({ itemId: itemFor[`rm:${m}`]?.id, qty: r2(q) })).filter(l => l.itemId && l.qty > 0);
+                const P = Object.entries(produce).map(([p, q]) => ({ itemId: itemFor[`fg:${p}`]?.id, qty: q, weight: Number((d.products || []).find(z => z.id === p)?.wt) || 1 })).filter(l => l.itemId && l.qty > 0);
+                if (C.length && P.length) tryPost(rep, `Production ${ddmmyyyy(x.day)}`, () => { saveVoucher({ type: 'SJ', date: x.date, consume: C, produce: P, ext, narration: `Production on ${ddmmyyyy(x.day)} from the Eco Pack production log (materials incl. scrap → finished goods)` }, { source: 'Eco Pack sync', created }); bump(rep, 'production entries'); });
+            } else if (x.k === 3) {
+                const m = x.m, ext = `ecopack:mt:${m.id}`;
+                if (hasExt(ext)) { rep.skipped++; return; }
+                const mc = (d.machines || []).find(z => z.id === m.machineId);
+                tryPost(rep, 'Machine repair', () => { saveVoucher({ type: 'PY', date: x.date, accountId: bank, ledgerId: sysId('repairs'), amount: Number(m.cost), ext, narration: `${m.type || 'Repair'}: ${mc?.name || m.machineId} — ${m.issue || ''}`.slice(0, 200) }, { source: 'Eco Pack sync', created }); bump(rep, 'repair payments'); });
+            }
+        });
+        // Payroll
+        (d.employees || []).forEach(se => upsertEmployee(rep, 'ecopack', se.id, {
+            code: se.code || '', name: se.name, dept: `${(d.units || []).find(u => u.id === se.unit)?.short || se.unit || ''} · ${se.dept || ''}`, desig: se.desig || '', salary: Number(se.salary) || 0, basicPct: 50,
+            doj: se.doj || '', exitDate: se.exitDate || '', status: se.status === 'Active' || !se.status ? 'Active' : 'Inactive', uan: /^\d{12}$/.test(se.uan || '') ? se.uan : '', pf: se.pf !== false, esi: se.esi !== false, bankAcc: se.account || ''
+        }));
+        Object.keys(d.pay || {}).sort().forEach(ym => {
+            const rows = {}; let paidOn = '';
+            Object.entries(d.pay[ym]).forEach(([sid, p]) => {
+                const e = co.employees.find(x => x.source === 'ecopack' && x.srcId === sid), s = p.snap || {};
+                if (!e) return;
+                rows[e.id] = { paidDays: s.paidDays, lop: s.lopDays || 0, gross: s.gross || 0, basic: s.basic || 0, pf: s.pf || 0, erPf: s.erPf || 0, esi: s.esi || 0, erEsi: s.erEsi || 0, pt: s.pt || 0, tds: 0, adv: 0, net: s.net ?? s.gross ?? 0 };
+                if (p.paidOn > paidOn) paidOn = p.paidOn;
+            });
+            importPayrollMonth(rep, 'ecopack', ym, rows, paidOn, bank);
+        });
+        link.lastSync = new Date().toISOString(); link.from = S.from; link.sample = Boolean(d.sample);
+        link.lastReport = { at: link.lastSync, added: rep.added, failed: rep.failed.slice(0, 50), needs: rep.needs };
+    });
+    audit('Synced from Eco Pack', { entity: 'Connection', ref: 'Eco Pack', after: reportText(rep) });
+    saveCo();
+    return rep;
+}
+const reportText = rep => (Object.entries(rep.added).map(([k, n]) => `${n} ${k}`).join(', ') || 'nothing new') + (rep.skipped ? ` · ${rep.skipped} already in the books` : '') + (rep.failed.length ? ` · ${rep.failed.length} not added` : '');
+
+// Quiet sync when a linked company is opened
+function autoSync() {
+    if (!co?.links || !canEdit()) return;
+    const msgs = [];
+    [['staybay', readStayBay, syncStayBay], ['ecopack', readEcoPack, syncEcoPack]].forEach(([k, read, sync]) => {
+        const l = co.links[k];
+        if (!l?.auto || !read()) return;
+        try { const rep = sync(); if (Object.keys(rep.added).length) msgs.push(`${SOURCE_LABEL[k]}: ${reportText(rep)}`); } catch (e) { console.warn(e); }
+    });
+    if (msgs.length) toast(`Synced — ${msgs.join(' · ')}`);
+}
+
+// ---------- screen ----------
+function connectionsHtml() {
+    const card = k => {
+        const S = SOURCES[k], l = linkOf(k), src = k === 'staybay' ? readStayBay() : readEcoPack();
+        const counts = !src ? '' : k === 'staybay' ? `${src.employees.length} employees, ${new Set(src.employees.flatMap(e => Object.keys(e.payments || {}))).size} paid months` : `${(src.db.orders || []).filter(o => o.status === 'Dispatched').length} invoices, ${(src.db.moves || []).filter(m => m.kind === 'Purchase').length} purchases, ${(src.db.employees || []).length} employees`;
+        const needs = (l?.lastReport?.needs || []).filter(n => n.kind === 'vendorGstin' && !(l.vendorGstin || {})[n.name]);
+        return `<div class="card"><div class="row" style="justify-content:space-between;align-items:flex-start"><div><h2 style="margin-bottom:4px">${esc(S.name)} ${l ? '<span class="badge good">Connected</span>' : ''}</h2><p class="note">${esc(S.what)}</p></div>
+            <a class="btn btn-g btn-sm" href="${S.url}" target="_blank" rel="noopener">Open dashboard ↗</a></div>
+            <div class="note" style="margin:10px 0">${src ? `✓ Found data (${esc(src.from)}): ${esc(counts)}` : `No ${SOURCE_LABEL[k]} data in this browser. Open the dashboard on this computer and browser once, or load its backup file below.`}${l?.lastSync ? `<br>Last synced ${new Date(l.lastSync).toLocaleString('en-IN')} into <b>${esc(co.profile.name)}</b>.` : ''}</div>
+            ${needs.length ? `<div class="warns"><b>Supplier GSTINs needed.</b> Purchase bills from these suppliers are held back until you add their GSTIN (input GST can only be claimed from a registered supplier). Choose "Unregistered" if they really have no GSTIN.<div class="fg" style="margin-top:8px">${needs.map((n, i) => `<label class="f">${esc(n.name)} <span class="hint">${n.bills} bill(s)</span><input id="vg_${i}" data-name="${esc(n.name)}" maxlength="15" placeholder="GSTIN or URD" style="text-transform:uppercase"></label>`).join('')}</div>
+                <div class="row" style="margin-top:8px"><button class="btn btn-p btn-sm" onclick="saveVendorGstins()">Save & sync again</button>${l.sample ? '<button class="btn btn-g btn-sm" onclick="fillSampleGstins()">Use sample GSTINs (sample data only)</button>' : ''}</div></div>` : ''}
+            ${l?.lastReport?.failed?.length ? `<details><summary class="note" style="cursor:pointer">${l.lastReport.failed.length} record(s) not added — why</summary><div class="note">${l.lastReport.failed.map(esc).join('<br>')}</div></details>` : ''}
+            <div class="row" style="margin-top:10px">${canEdit() ? `<button class="btn btn-p" ${src ? '' : 'disabled'} onclick="runSync('${k}')">${l ? 'Sync now' : 'Connect & sync'}</button>` : ''}
+                <label class="btn btn-s btn-sm" style="cursor:pointer">Load backup file<input type="file" accept=".json" hidden onchange="loadBackupFor('${k}', this)"></label>
+                ${l ? `<label class="chk"><input type="checkbox" ${l.auto ? 'checked' : ''} onchange="linkOf('${k}').auto=this.checked;saveCo()"> Sync automatically when this company opens</label>` : ''}
+                ${k === 'staybay' && !l && isAdmin() ? `<button class="btn btn-g btn-sm" onclick="createLinkedCompany('staybay')">New company for STAY BAY</button>` : ''}${k === 'ecopack' && !l && isAdmin() ? `<button class="btn btn-g btn-sm" onclick="createLinkedCompany('ecopack')">New company for Eco Pack</button>` : ''}</div></div>`;
+    };
+    return `<p class="note" style="margin-bottom:12px">Data syncs into the company that is open now: <b>${esc(co.profile.name)}</b>. Connect STAY BAY to its own company and Eco Pack to its own company. Syncing again only adds what is new; nothing is ever posted twice.</p>${card('staybay')}${card('ecopack')}`;
+}
+function viewConnect() { $('#view').innerHTML = pageHead('Connected dashboards', 'Bring payroll from STAY BAY, and sales, purchases, production and payroll from Eco Pack, straight into the books.') + connectionsHtml(); }
+function runSync(k) {
+    try {
+        const rep = k === 'staybay' ? syncStayBay() : syncEcoPack();
+        modal({ title: `Synced from ${SOURCE_LABEL[k]}`, body: `<p style="margin-bottom:10px">${esc(reportText(rep))}.</p>${Object.keys(rep.added).length ? `<ul style="margin-left:18px">${Object.entries(rep.added).map(([n, c]) => `<li>${c} ${esc(n)}</li>`).join('')}</ul>` : ''}${rep.needs.length ? `<div class="warns">${rep.needs.length} supplier(s) need a GSTIN before their bills are added — see the connection card.</div>` : ''}${rep.failed.length ? `<details style="margin-top:8px"><summary>${rep.failed.length} not added</summary><div class="note">${rep.failed.slice(0, 40).map(esc).join('<br>')}</div></details>` : ''}<p class="note" style="margin-top:10px">Every entry is posted to the ledgers, GST and statements and recorded in the audit trail.</p>`, foot: '<button class="btn btn-p" onclick="closeModal();route()">Done</button>' });
+    } catch (e) { alert(e.message); }
+}
+async function loadBackupFor(k, input) {
+    const f = input.files[0];
+    if (!f) return;
+    try { loadSourceFile(k, await f.text()); toast('Backup loaded. Press Sync.'); route(); } catch (e) { alert(e.message); }
+}
+function saveVendorGstins() {
+    const l = linkOf('ecopack'), E = [];
+    $$('[id^=vg_]').forEach(inp => {
+        const g = inp.value.trim().toUpperCase();
+        if (!g) return;
+        if (g !== 'URD' && !gstinValid(g)) E.push(`${inp.dataset.name}: GSTIN is not valid.`);
+        else l.vendorGstin[inp.dataset.name] = g;
+    });
+    if (E.length) return alert(E.join('\n'));
+    saveCo(); runSync('ecopack');
+}
+function fillSampleGstins() {
+    const l = linkOf('ecopack');
+    (l.lastReport?.needs || []).forEach((n, i) => { l.vendorGstin[n.name] ||= makeGstin('33', `AAAFE${String(4100 + i * 7).padStart(4, '0')}K`); });
+    saveCo(); runSync('ecopack');
+}
+function createLinkedCompany(k) {
+    if (limitReached('companies')) return upgradePrompt('More companies');
+    const S = k === 'staybay' ? readStayBay() : readEcoPack();
+    let p;
+    if (k === 'staybay') {
+        const em = S?.employer || {};
+        p = { name: em.name || 'STAY BAY Business Hotels', legalName: em.name || '', entity: 'Proprietorship', pan: panValid(em.pan) ? em.pan : '', tan: /^[A-Z]{4}\d{5}[A-Z]$/.test(em.tan || '') ? em.tan : '', state: '33', address: em.address || '', city: em.place || '' };
+        const months = (S?.employees || []).flatMap(e => Object.keys(e.payments || {})).sort();
+        p.booksFrom = `${fyOf((months[0] || todayISO().slice(0, 7)) + '-01')}-04-01`;
+    } else {
+        const c = S?.db?.company || {};
+        const first = (S?.db?.moves || []).map(m => m.date).sort()[0] || todayISO();
+        p = { name: c.name || 'Eco Pack Private Limited', legalName: c.name || '', entity: 'Private Ltd', gstin: gstinValid(c.gstin || '') ? c.gstin : '', state: c.stateCode || '33', address: c.address || '', city: 'Chennai', booksFrom: `${fyOf(first)}-04-01`, aato: 60000000 };
+        if (p.gstin) p.pan = p.gstin.slice(2, 12);
+    }
+    const c = newCompanyData(p);
+    co = c;
+    meta.companies.push({ id: c.id, name: p.name, gstin: p.gstin || '' });
+    audit('Company created', { entity: 'Company', ref: p.name, after: `For the ${SOURCE_LABEL[k]} connection` });
+    co.links = { [k]: { auto: true, vendorGstin: {} } };
+    saveCo(); saveMeta();
+    state.fy = defaultFy();
+    runSync(k);
 }
 
 </script>
@@ -2411,8 +3333,9 @@ const drcr = n => Math.abs(n) < 0.005 ? '—' : `${num(Math.abs(n))} ${n > 0 ? '
 const pageHead = (title, desc, actions = '') => `<div class="page-head"><div><h1>${esc(title)}</h1>${desc ? `<p>${desc}</p>` : ''}</div><div class="row">${actions}</div></div>`;
 
 // ---------- boot & auth ----------
-function boot() {
+async function boot() {
     loadMeta();
+    await store.init();
     try { state.mode = localStorage.getItem('wcerp.mode') || 'advanced'; } catch (e) { /* ignore */ }
     window.addEventListener('hashchange', route);
     document.addEventListener('keydown', onKey);
@@ -2615,7 +3538,7 @@ function enterApp() {
     applyMode();
     const allowed = userCompanies();
     const pick = allowed.find(c => c.id === meta.lastCompany) || allowed[0];
-    if (pick && openCompany(pick.id)) { state.fy = defaultFy(); if (!location.hash || location.hash === '#/companies') location.hash = '#/dashboard'; }
+    if (pick && openCompany(pick.id)) { state.fy = defaultFy(); setTimeout(autoSync, 50); if (!location.hash || location.hash === '#/companies') location.hash = '#/dashboard'; }
     else location.hash = '#/companies';
     route();
 }
@@ -2655,7 +3578,7 @@ const ROUTES = [
     [/^#\/companies$/, () => viewCompanies(), true],
     [/^#\/dashboard$/, () => viewDashboard()],
     [/^#\/(sales|purchases|notes|receipts|payments|journals)$/, m => viewVoucherList(m[1])],
-    [/^#\/new\/(SI|PB|CN|DN|RC|PY|JV|CT)$/, m => viewVoucherForm({ type: m[1] })],
+    [/^#\/new\/(SI|PB|CN|DN|RC|PY|JV|CT|SJ)$/, m => viewVoucherForm({ type: m[1] })],
     [/^#\/edit\/(.+)$/, m => viewVoucherForm(vById(m[1]))],
     [/^#\/v\/(.+)$/, m => viewVoucher(m[1])],
     [/^#\/(customers|vendors)$/, m => viewContacts(m[1])],
@@ -2671,6 +3594,8 @@ const ROUTES = [
     [/^#\/audit$/, () => viewAudit()],
     [/^#\/settings(?:\/(\w+))?$/, m => viewSettings(m[1] || 'company')],
     [/^#\/billing$/, () => viewBilling(), true],
+    [/^#\/payroll$/, () => viewPayroll()],
+    [/^#\/connect$/, () => viewConnect()],
     [/^#\/manual$/, () => viewManual(), true]
 ];
 function route() {
@@ -2706,7 +3631,7 @@ function renderChrome() {
         ['Transactions'],
         ['#/sales', 'file', 'Sales', 'F8'],
         ['#/purchases', 'cart', 'Purchases', 'F9'],
-        ['#/scan', 'cam', 'Scan a bill', '', 'adv'],
+        ['#/scan', 'cam', 'Scan bills'],
         ['#/receipts', 'in', 'Receipts', 'F6'],
         ['#/payments', 'out', 'Payments', 'F5'],
         ['#/notes', 'swap', 'Credit / Debit notes', '', 'adv'],
@@ -2716,6 +3641,8 @@ function renderChrome() {
         ['#/vendors', 'users', 'Vendors'],
         ['#/items', 'box', 'Items & services'],
         ['#/accounts', 'list', 'Chart of accounts'],
+        ['#/payroll', 'users', 'Payroll'],
+        ['#/connect', 'swap', 'Connected dashboards'],
         ['Compliance'],
         ['#/gst', 'receipt', 'GST', '', '', items.filter(i => /e-invoice|2B|e-way/.test(i.text)).length],
         ['#/tds', 'receipt', 'TDS', '', 'adv'],
@@ -2753,7 +3680,7 @@ function quickAdd() {
     if (!canEdit()) return toast('Your role is read-only.');
     const b = (href, icon, label, sub, cls = '') => `<a class="status-option ${cls}" href="${href}" onclick="closeModal()" style="text-decoration:none">${ic(icon)}<span><b>${label}</b><small style="display:block;color:var(--ink-3)">${sub}</small></span></a>`;
     modal({
-        title: 'Add new', body: `<div style="display:grid;gap:8px">${b('#/new/SI', 'file', 'Sales invoice', 'Bill a customer')}${b('#/scan', 'cam', 'Scan a bill', 'Photo of a bill → entry', 'adv')}${b('#/new/PB', 'cart', 'Purchase bill', 'A supplier\'s bill')}${b('#/new/RC', 'in', 'Receipt', 'Money received')}${b('#/new/PY', 'out', 'Payment', 'Money paid')}${b('#/new/CN', 'swap', 'Credit / debit note', 'Returns and discounts', 'adv')}${b('#/new/JV', 'book', 'Journal', 'Adjustments', 'adv')}${b('#/new/CT', 'bank', 'Contra', 'Cash ↔ bank', 'adv')}</div>`
+        title: 'Add new', body: `<div style="display:grid;gap:8px">${b('#/new/SI', 'file', 'Sales invoice', 'Bill a customer')}${b('#/scan', 'cam', 'Scan bills', 'Photos of bills → posted entries')}${b('#/new/PB', 'cart', 'Purchase bill', 'A supplier\'s bill')}${b('#/new/RC', 'in', 'Receipt', 'Money received')}${b('#/new/PY', 'out', 'Payment', 'Money paid')}${b('#/new/CN', 'swap', 'Credit / debit note', 'Returns and discounts', 'adv')}${b('#/new/JV', 'book', 'Journal', 'Adjustments', 'adv')}${b('#/new/CT', 'bank', 'Contra', 'Cash ↔ bank', 'adv')}</div>`
     });
 }
 function showShortcuts() {
@@ -2820,7 +3747,7 @@ function viewCompanies() {
         + (cards ? `<div class="grid g3">${cards}</div>` : `<div class="empty">No companies yet. ${isAdmin() ? 'Create your first company to begin.' : 'Ask the owner to give you access.'}</div>`);
 }
 function pickCompany(id) {
-    if (openCompany(id)) { state.fy = defaultFy(); audit('Company opened', { entity: 'Company', ref: co.profile.name }); saveCo(); go('#/dashboard'); }
+    if (openCompany(id)) { state.fy = defaultFy(); audit('Company opened', { entity: 'Company', ref: co.profile.name }); saveCo(); autoSync(); go('#/dashboard'); }
 }
 function companyForm(existing) {
     const p = existing ? co.profile : { entity: 'Proprietorship', state: '33', booksFrom: `${fyOf(todayISO())}-04-01`, lut: true, roundOff: true, aato: 0 };
@@ -3004,6 +3931,7 @@ function itemForm(id, after) {
         title: id ? `Edit ${i.name}` : 'New item or service', wide: true,
         body: `<div id="itErr"></div><div class="fg">
             <label class="f">Type<select id="it_type">${opt('goods', 'Goods', i.type)}${opt('service', 'Service', i.type)}</select></label>
+            <label class="f">Stock type <span class="hint">Manufacturers: raw material / finished goods</span><select id="it_kind">${opt('trading', 'Trading goods', i.kind || 'trading')}${opt('raw', 'Raw material', i.kind)}${opt('finished', 'Finished goods (we make it)', i.kind)}</select></label>
             <label class="f">Name *<input id="it_name" value="${esc(i.name)}"></label>
             <label class="f">HSN / SAC * <span class="hint">4–8 digits; services start with 99</span><input id="it_hsn" maxlength="8" value="${esc(i.hsn)}"></label>
             <label class="f">GST rate<select id="it_rate">${GST_RATES.map(r => opt(r, `${r}%`, i.gstRate)).join('')}</select></label>
@@ -3018,7 +3946,7 @@ function itemForm(id, after) {
         </div><p class="note" style="margin-top:10px">GST 2.0 (from 22 Sep 2025): main rates are 5%, 18% and 40%. Most former 12% items are now 5%, most former 28% items 18%.</p>`,
         foot: `<button class="btn btn-s" onclick="closeModal()">Cancel</button><button class="btn btn-p" id="itOk">Save</button>`,
         onOpen: () => $('#itOk').onclick = () => {
-            const data = { ...i, id: id || undefined, type: val('it_type'), name: val('it_name'), hsn: val('it_hsn'), gstRate: Number(val('it_rate')), unit: val('it_unit'), rate: numv('it_sr'), purchaseRate: numv('it_pr'), salesAcc: val('it_sacc'), purchaseAcc: val('it_pacc'), trackStock: chk('it_track'), openQty: numv('it_oq'), openValue: numv('it_ov') };
+            const data = { ...i, id: id || undefined, type: val('it_type'), kind: val('it_kind'), name: val('it_name'), hsn: val('it_hsn'), gstRate: Number(val('it_rate')), unit: val('it_unit'), rate: numv('it_sr'), purchaseRate: numv('it_pr'), salesAcc: val('it_sacc'), purchaseAcc: val('it_pacc'), trackStock: chk('it_track'), openQty: numv('it_oq'), openValue: numv('it_ov') };
             try { const s = saveItem(data); closeModal(); toast(`${s.name} saved.`); after ? after(s) : route(); } catch (err) { showErr('#itErr', err); }
         }
     });
@@ -3065,7 +3993,7 @@ function accountForm(id) {
 'use strict';
 // ===================== We Create ERP · vouchers: lists, forms, view, print, scan =====================
 
-const LIST_TYPES = { sales: ['SI'], purchases: ['PB'], notes: ['CN', 'DN'], receipts: ['RC'], payments: ['PY'], journals: ['JV', 'CT'] };
+const LIST_TYPES = { sales: ['SI'], purchases: ['PB'], notes: ['CN', 'DN'], receipts: ['RC'], payments: ['PY'], journals: ['JV', 'CT', 'SJ'] };
 const LIST_TITLE = { sales: 'Sales invoices', purchases: 'Purchase bills', notes: 'Credit & debit notes', receipts: 'Receipts', payments: 'Payments', journals: 'Journal & contra' };
 let listFilter = { month: '', status: '' };
 let F = null;              // the voucher being edited
@@ -3097,7 +4025,7 @@ function viewVoucherList(kind) {
         purchases: 'Supplier bills. Input GST, reverse charge and TDS are calculated and posted automatically; bills are matched against GSTR-2B.',
         notes: 'Credit notes reduce a sale (returns, discounts); debit notes reduce a purchase. They must point to the original document.',
         receipts: 'Money received, settled against open invoices bill by bill.', payments: 'Money paid, settled against open bills; pay TDS and GST here too.',
-        journals: 'Adjustments (depreciation, provisions, transfers) and cash ↔ bank movements.'
+        journals: 'Adjustments (depreciation, provisions, transfers), cash ↔ bank movements, and production entries that turn raw materials into finished goods.'
     }[kind], canEdit() ? `${kind === 'purchases' ? `<a class="btn btn-s adv" href="#/scan">${ic('cam')} Scan bill</a>` : ''}${newBtns}` : '')
         + `<div class="card"><div class="row" style="margin-bottom:12px">
             <select onchange="listFilter.month=this.value;route()">${opt('', `All of FY ${fyLabel(fy)}`, listFilter.month)}${months.map(m => opt(m, ymLabel(m), listFilter.month)).join('')}</select>
@@ -3127,10 +4055,11 @@ function viewVoucherForm(src) {
     if (!editing && pendingDraft && pendingDraft.v.type === F.type) { F = pendingDraft.v; F.attachmentFile = pendingDraft.file; pendingDraft = null; }
     F.date ||= todayISO() < fyStart(state.fy) || todayISO() > fyEnd(state.fy) ? fyEnd(state.fy) : todayISO();
     if (ITEM_TYPES.includes(F.type)) { F.lines = F.lines?.length ? F.lines : [blankLine()]; if (F.itc === undefined) F.itc = true; }
+    if (F.type === 'SJ') { F.consume = F.consume?.length ? F.consume : [{ itemId: '', qty: '' }]; F.produce = F.produce?.length ? F.produce : [{ itemId: '', qty: '' }]; }
     if (F.type === 'JV') F.jlines = F.jlines?.length ? F.jlines.map(l => ({ ...l })) : [{ acc: '', dr: 0, cr: 0 }, { acc: '', dr: 0, cr: 0 }];
     const T = VTYPES[F.type];
     const head = `<div class="page-head"><div><h1>${editing ? `Edit ${esc(F.no)}` : `New ${T.name}`}</h1><p>${editing ? 'Every change is recorded in the audit trail with the old and new values.' : `Number <b>${esc(previewNumber(F.type, F.date))}</b> is given when you save (numbers never skip). <span class="hide-m">Shortcut <kbd>${T.key}</kbd> · save with <kbd>Ctrl</kbd>+<kbd>S</kbd>.</span>`}</p></div></div>`;
-    $('#view').innerHTML = head + `<div class="vform"><div id="vErr"></div>${ITEM_TYPES.includes(F.type) ? itemFormHtml() : F.type === 'JV' ? journalFormHtml() : moneyFormHtml()}
+    $('#view').innerHTML = head + `<div class="vform"><div id="vErr"></div>${ITEM_TYPES.includes(F.type) ? itemFormHtml() : F.type === 'JV' ? journalFormHtml() : F.type === 'SJ' ? sjFormHtml() : moneyFormHtml()}
         <div id="vWarn"></div>
         <div class="form-foot"><a class="btn btn-s" href="${editing ? `#/v/${F.id}` : 'javascript:history.back()'}">Cancel</a>${editing ? '' : '<button class="btn btn-s" id="vSaveNew">Save & new</button>'}<button class="btn btn-p" id="vSave">Save <kbd style="background:transparent;color:#fff;border-color:rgba(255,255,255,.4)">Ctrl S</kbd></button></div></div>`;
     wireForm();
@@ -3206,6 +4135,7 @@ function wireForm() {
         onParty(true);
         drawLines();
     } else if (F.type === 'JV') drawJournal();
+    else if (F.type === 'SJ') drawSj();
     else {
         on('f_acc', 'onchange', e => { F.accountId = e.target.value; refresh(); });
         on('f_to', 'onchange', e => { F.toId = e.target.value; });
@@ -3430,7 +4360,7 @@ function viewVoucher(id) {
         ${v.ewb ? `<div class="warns" style="background:var(--info-soft);color:var(--info)"><b>e-Way bill${v.ewb.test ? ' (TEST)' : ''}:</b> ${esc(v.ewb.no)} · ${esc(v.ewb.vehicle)} · ${v.ewb.distance} km · valid till ${fmtDate(v.ewb.validUpto)}</div>` : ''}
         <div class="grid g3">
         <div class="card" style="grid-column:span 2">
-            ${ITEM_TYPES.includes(v.type) ? `<div class="tw"><table class="t"><thead><tr><th class="hide-m">#</th><th>Item / description</th><th class="hide-m">HSN</th><th class="n">Qty</th><th class="n hide-m">Rate</th><th class="n hide-m">Taxable</th><th class="n hide-m">GST</th><th class="n hide-m">Tax</th><th class="n">Amount</th></tr></thead><tbody>
+            ${v.type === 'SJ' ? sjViewHtml(v) : ITEM_TYPES.includes(v.type) ? `<div class="tw"><table class="t"><thead><tr><th class="hide-m">#</th><th>Item / description</th><th class="hide-m">HSN</th><th class="n">Qty</th><th class="n hide-m">Rate</th><th class="n hide-m">Taxable</th><th class="n hide-m">GST</th><th class="n hide-m">Tax</th><th class="n">Amount</th></tr></thead><tbody>
                 ${v.lines.map((l, i) => `<tr><td class="hide-m">${i + 1}</td><td style="white-space:normal">${esc(l.desc || itemById(l.itemId)?.name || '')}</td><td class="hide-m">${esc(l.hsn)}</td><td class="n">${l.qty} ${esc(l.unit)}</td><td class="n hide-m">${num(l.rate)}</td><td class="n hide-m">${num(l.taxable)}</td><td class="n hide-m">${l.effRate ?? l.gstRate}%</td><td class="n hide-m">${num(l.cgst + l.sgst + l.igst)}</td><td class="n">${num(l.amount)}</td></tr>`).join('')}
                 </tbody></table></div>
                 <div class="totals" style="margin-top:12px"><div><span>Taxable</span><b>${num(t.taxable)}</b></div>${t.cgst ? `<div><span>CGST</span><span>${num(t.cgst)}</span></div><div><span>SGST</span><span>${num(t.sgst)}</span></div>` : ''}${t.igst ? `<div><span>IGST</span><span>${num(t.igst)}</span></div>` : ''}${t.roundOff ? `<div><span>Round off</span><span>${num(t.roundOff)}</span></div>` : ''}<div class="big"><span>Total</span><span>${inr(t.total)}</span></div>${v.tcs?.amount ? `<div><span>TCS ${esc(tcsName(v.tcs.section, true))} @ ${v.tcs.rate}%</span><span>${num(v.tcs.amount)}</span></div><div class="big"><span>Receivable</span><span>${inr(t.receivable)}</span></div>` : ''}${v.tds?.amount ? `<div><span>TDS ${esc(tdsName(v.tds.section, true))} @ ${v.tds.rate}%</span><span>−${num(v.tds.amount)}</span></div>` : ''}</div>
@@ -3552,41 +4482,94 @@ function printVoucher(id) {
 
 // ---------- scan a bill ----------
 let scan = null;
+// Bills that read cleanly are posted straight away (Settings → Preferences can turn this off); anything unclear
+// is kept in a list to check. Several bills can be picked at once.
+let scanResults = [];
 function viewScan() {
     if (!canEdit()) { $('#view').innerHTML = errorsHtml('Your role is read-only.'); return; }
     scan = null;
-    $('#view').innerHTML = pageHead('Scan a bill', 'Upload a photo or PDF of a bill. The ERP reads it, decides whether it is a purchase (you are the buyer) or a sale (you are the seller) from the GSTINs, finds or creates the party, and fills the voucher. You check it and save; everything else (ledgers, GST, TDS, statements) follows automatically.')
+    const auto = co.settings.prefs?.autoPost !== false;
+    $('#view').innerHTML = pageHead('Scan bills', `Upload photos or PDFs of bills — several at once if you like. The ERP reads each one, works out from the GSTINs whether it is a purchase or a sale, finds or creates the party and ${auto ? '<b>posts it automatically when everything reads cleanly</b>' : 'fills the entry for you to check'}. Ledgers, GST, TDS, stock and the financial statements update straight away.`)
         + `<div class="grid g2"><div class="card">
-            <label class="drop" id="drop"><input type="file" id="scanFile" accept="image/*,application/pdf" capture="environment" hidden>${ic('cam')}<b>Drop a bill here, or tap to take a photo</b><span class="note">JPG, PNG or PDF · reading needs internet the first time</span></label>
+            <label class="drop" id="drop"><input type="file" id="scanFile" accept="image/*,application/pdf" multiple hidden>${ic('cam')}<b>Drop bills here, or tap to choose / take photos</b><span class="note">JPG, PNG or PDF · several at once · reading needs internet the first time</span></label>
+            <label class="chk" style="margin-top:12px"><input type="checkbox" ${auto ? 'checked' : ''} onchange="(co.settings.prefs ||= {}).autoPost=this.checked;saveCo();route()"> Post automatically when a bill reads cleanly (all details found, totals agree, GSTINs valid)</label>
             <div id="scanProg" hidden style="margin-top:14px"><div class="note" id="scanMsg">Reading…</div><div class="progress" style="margin-top:6px"><i id="scanBar"></i></div></div>
-            <details style="margin-top:14px"><summary class="note" style="cursor:pointer">No photo? Paste the bill text instead</summary><textarea id="scanText" rows="7" style="width:100%;margin-top:8px" placeholder="Paste the text of the bill"></textarea><button class="btn btn-s btn-sm" style="margin-top:8px" onclick="processText($('#scanText').value, null)">Read this text</button></details>
+            <details style="margin-top:14px"><summary class="note" style="cursor:pointer">No photo? Paste the bill text instead</summary><textarea id="scanText" rows="7" style="width:100%;margin-top:8px" placeholder="Paste the text of the bill"></textarea><button class="btn btn-s btn-sm" style="margin-top:8px" onclick="handleBillText($('#scanText').value, null, 'Pasted text')">Read this text</button></details>
             <div id="scanPrev" style="margin-top:14px"></div></div>
-        <div class="card"><h2>What the ERP found</h2><div id="scanOut"><p class="note">Upload a bill to begin.</p></div></div></div>`;
+        <div class="card"><h2>Results</h2><div id="scanList"></div><div id="scanOut"></div></div></div>`;
+    drawScanList();
     const drop = $('#drop'), input = $('#scanFile');
-    input.onchange = () => input.files[0] && processFile(input.files[0]);
+    input.onchange = () => processFiles([...input.files]);
     drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
     drop.ondragleave = () => drop.classList.remove('over');
-    drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); if (e.dataTransfer.files[0]) processFile(e.dataTransfer.files[0]); };
+    drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); processFiles([...e.dataTransfer.files]); };
 }
-async function processFile(file) {
-    if (limitReached('scans')) return upgradePrompt(`More than ${planLimits().scans} bill scans a month`);
-    if (file.size > 10 * 1024 * 1024) return toast('Please use a file under 10 MB.');
-    $('#scanProg').hidden = false;
-    $('#scanPrev').innerHTML = /^image\//.test(file.type) ? `<img class="scan-img" src="${URL.createObjectURL(file)}" alt="Bill">` : `<p class="note">📄 ${esc(file.name)}</p>`;
-    try {
-        const text = await readBillFile(file, (p, m) => { $('#scanBar').style.width = p + '%'; $('#scanMsg').textContent = `${m}… ${p}%`; });
-        $('#scanBar').style.width = '100%';
-        $('#scanMsg').textContent = 'Done';
-        processText(text, file);
-    } catch (err) {
-        $('#scanMsg').textContent = err.message;
-        $('#scanOut').innerHTML = errorsHtml(err) + '<p class="note">You can still paste the bill text, or enter it with F9.</p>';
+function drawScanList() {
+    const box = $('#scanList');
+    if (!box) return;
+    box.innerHTML = scanResults.length ? `<div class="tw" style="margin-bottom:12px"><table class="t"><tbody>${scanResults.map((r, i) => `<tr><td style="white-space:normal"><b>${esc(r.name)}</b><div class="note">${esc(r.summary || '')}</div></td><td style="white-space:normal">${r.status === 'posted' ? `<span class="badge good">Posted</span> <a href="#/v/${r.v.id}">${esc(r.v.no)}</a>` : r.status === 'review' ? `<span class="badge warn">Check</span> <span class="note">${esc(r.reason)}</span>` : r.status === 'reading' ? '<span class="badge info">Reading…</span>' : `<span class="badge bad">Not read</span> <span class="note">${esc(r.reason)}</span>`}</td><td>${r.status === 'review' ? `<button class="btn btn-p btn-sm" onclick="reviewScan(${i})">Check & save</button>` : ''}</td></tr>`).join('')}</tbody></table></div>` : '<p class="note">Upload bills to begin.</p>';
+}
+async function processFiles(list) {
+    for (const file of list) {
+        if (limitReached('scans')) { upgradePrompt(`More than ${planLimits().scans} bill scans a month`); break; }
+        if (file.size > 10 * 1024 * 1024) { scanResults.unshift({ name: file.name, status: 'error', reason: 'File is over 10 MB.' }); continue; }
+        const r = { name: file.name, status: 'reading' };
+        scanResults.unshift(r); drawScanList();
+        $('#scanProg').hidden = false;
+        $('#scanPrev').innerHTML = /^image\//.test(file.type) ? `<img class="scan-img" src="${URL.createObjectURL(file)}" alt="Bill">` : `<p class="note">📄 ${esc(file.name)}</p>`;
+        try {
+            const text = await readBillFile(file, (p, m) => { $('#scanBar').style.width = p + '%'; $('#scanMsg').textContent = `${file.name}: ${m}… ${p}%`; });
+            Object.assign(r, await autoPostBill(text, file));
+        } catch (err) { Object.assign(r, { status: 'error', reason: err.message }); }
+        drawScanList();
     }
+    $('#scanMsg').textContent = 'Done';
+    $('#scanBar').style.width = '100%';
 }
-function processText(text, file) {
-    if (file || text) { meta.scans ||= {}; meta.scans[ymOf(todayISO())] = scansThisMonth() + 1; saveMeta(); }
+async function handleBillText(text, file, name) {
+    const r = { name: name || 'Bill' };
+    Object.assign(r, await autoPostBill(text, file));
+    scanResults.unshift(r);
+    drawScanList();
+    if (r.status === 'review') reviewScan(0);
+}
+// Reads the bill text and either posts it or explains what needs checking
+async function autoPostBill(text, file) {
+    meta.scans ||= {}; meta.scans[ymOf(todayISO())] = scansThisMonth() + 1; saveMeta();
     const p = parseInvoiceText(text);
     const d = draftFromBill(p);
+    const base = { p, d, file, summary: [p.invoiceNo, p.date && fmtDate(p.date), p.total != null && inr(p.total)].filter(Boolean).join(' · ') };
+    const review = reason => ({ ...base, status: 'review', reason });
+    if (co.settings.prefs?.autoPost === false) return review('Automatic posting is off');
+    if (p.confidence < 5) return review(`Some details were not read (${[!p.gstins.length && 'GSTIN', !p.invoiceNo && 'invoice no.', !p.date && 'date', p.total == null && 'total', p.taxable == null && 'taxable value'].filter(Boolean).join(', ')})`);
+    if (p.checks.length) return review(p.checks[0]);
+    if (!d.partyGstin) return review(`The other party's GSTIN was not found${co.profile.gstin ? '' : ' (add your own GSTIN in Settings so the ERP can tell sales from purchases)'}`);
+    if (d.type === 'SI' && p.buyerGstin === co.profile.gstin) return review('Your GSTIN is the buyer here, but the bill reads like a sale');
+    if (!p.date || p.date > todayISO()) return review('The bill date is missing or in the future');
+    try {
+        let v;
+        inBulk(() => {
+            if (!d.v.partyId && d.newParty) d.v.partyId = saveContact({ ...d.newParty, creditDays: co.settings.prefs?.[d.type === 'PB' ? 'vendDays' : 'custDays'] ?? 30 }).id;
+            const party = contactById(d.v.partyId);
+            d.v.pos = d.type === 'PB' ? companyState() : party.state;
+            if (d.type === 'PB' && party.tdsSection) d.v.tds = { section: party.tdsSection };
+            if (party.lastAcc) d.v.lines[0].accId = party.lastAcc;
+            d.v.date = p.date;
+            const check = computeVoucher(JSON.parse(JSON.stringify(d.v)));
+            if (Math.abs(check.totals.total - p.total) > 2) throw Object.assign(new Error(`Worked-out total ${inr(check.totals.total)} differs from the bill's ${inr(p.total)}`), { review: true });
+            v = d.type === 'SI' ? saveVoucher({ ...d.v, no: p.invoiceNo }, { keepNo: true, source: 'Scanned bill (posted automatically)' }) : saveVoucher(d.v, { source: 'Scanned bill (posted automatically)' });
+        });
+        if (file) { await files.put(`att:${v.id}`, file); v.attachment = { name: file.name, type: file.type, size: file.size }; saveCo(); }
+        return { ...base, status: 'posted', v, summary: `${contactById(v.partyId)?.name} · ${base.summary}` };
+    } catch (e) { return review(e.message.split('\n')[0]); }
+}
+function reviewScan(i) {
+    const r = scanResults[i];
+    if (!r?.p) return;
+    showScanReview(r.p, r.d, r.file);
+}
+function processText(text, file) { return handleBillText(text, file, file?.name || 'Bill'); }
+function showScanReview(p, d, file) {
     scan = { p, d, file };
     const party = contactById(d.v.partyId);
     const row = (k, v, ok = true) => `<dt>${k}</dt><dd>${v ? esc(v) : '<span class="badge warn">not found</span>'}${!ok ? ' <span class="badge warn">check</span>' : ''}</dd>`;
@@ -3629,6 +4612,26 @@ async function upiQrInto(sel, link, amount) {
         const box = $(sel);
         if (box && src) box.innerHTML = `<img src="${src}" alt="UPI QR" style="width:96px;height:96px"><div style="font-size:9px">Scan to pay ${inr(amount)} by UPI</div>`;
     } catch (e) { /* offline: invoice prints without the QR */ }
+}
+
+// ---------- production (stock journal) ----------
+function sjFormHtml() {
+    return `<div class="card"><div class="fg"><label class="f">Date *<input id="f_date" type="date" value="${F.date}"></label><label class="f wide">Narration<input id="f_narr" value="${esc(F.narration)}" placeholder="e.g. Production for the week, batch numbers"></label></div>
+        <p class="note" style="margin-top:8px">Materials consumed leave stock at their average cost; that cost becomes the cost of the goods produced. No ledger entry is made: the value moves within inventory, and the Profit and Loss shows it as cost of materials consumed and change in finished goods.</p></div>
+        <div class="grid g2"><div class="card"><h2>Materials consumed</h2><table class="lines"><tbody id="sj_c"></tbody></table><button class="btn btn-s btn-sm" type="button" onclick="F.consume.push({itemId:'',qty:''});drawSj()">+ Add material</button></div>
+        <div class="card"><h2>Goods produced</h2><table class="lines"><tbody id="sj_p"></tbody></table><button class="btn btn-s btn-sm" type="button" onclick="F.produce.push({itemId:'',qty:''});drawSj()">+ Add product</button></div></div>`;
+}
+function drawSj() {
+    const st = stockAt(F.date || todayISO()).items;
+    const items = kinds => co.items.filter(i => i.type === 'goods' && i.trackStock !== false && kinds.includes(i.kind || 'trading'));
+    const row = (side, l, i, kinds) => `<tr data-i="${i}"><td class="wide" data-l="Item"><select data-s="${side}" data-k="itemId">${opt('', 'Choose…', l.itemId)}${items(kinds).map(it => opt(it.id, `${it.name}${st[it.id] ? ` · ${r2(st[it.id].qty)} ${it.unit} in stock` : ''}`, l.itemId)).join('')}</select></td><td class="half" data-l="Quantity"><input data-s="${side}" data-k="qty" class="num" type="number" min="0" step="0.001" inputmode="decimal" value="${l.qty}"></td><td class="del"><button class="btn btn-g btn-sm" type="button" onclick="F['${side}'].splice(${i},1);drawSj()">×</button></td></tr>`;
+    $('#sj_c').innerHTML = F.consume.map((l, i) => row('consume', l, i, ['raw', 'trading'])).join('');
+    $('#sj_p').innerHTML = F.produce.map((l, i) => row('produce', l, i, ['finished', 'trading'])).join('');
+    $$('#sj_c [data-k], #sj_p [data-k]').forEach(el => { el[el.tagName === 'SELECT' ? 'onchange' : 'oninput'] = () => { const L = F[el.dataset.s][Number(el.closest('tr').dataset.i)]; L[el.dataset.k] = el.dataset.k === 'qty' ? Number(el.value) || 0 : el.value; }; });
+}
+function sjViewHtml(v) {
+    const t = list => `<div class="tw"><table class="t"><thead><tr><th>Item</th><th class="n">Quantity</th></tr></thead><tbody>${(list || []).map(l => { const it = itemById(l.itemId); return `<tr><td>${esc(it?.name || '')}</td><td class="n">${r2(l.qty)} ${esc(it?.unit || '')}</td></tr>`; }).join('')}</tbody></table></div>`;
+    return `<div class="grid g2"><div><h2>Materials consumed</h2>${t(v.consume)}</div><div><h2>Goods produced</h2>${t(v.produce)}</div></div>${v.narration ? `<p class="note" style="margin-top:8px">${esc(v.narration)}</p>` : ''}`;
 }
 
 </script>
@@ -3708,8 +4711,13 @@ function rptPL() {
         { label: 'II. Other income', cur: t(pl, 'other'), prev: t(pp, 'other'), details: mergeDetails(pl.other, pp?.other) },
         { label: 'III. Total income (I + II)', cur: pl.totalIncome, prev: pp?.totalIncome, cls: 'sub' },
         { head: 'IV. Expenses' },
-        { label: 'Purchases of stock-in-trade', ind: 'ind', cur: t(pl, 'purchases'), prev: t(pp, 'purchases'), details: mergeDetails(pl.purchases, pp?.purchases) },
-        { label: 'Changes in inventories of stock-in-trade', ind: 'ind', note: `Opening ${num(pl.openStock)} − closing ${num(pl.closeStock)}`, cur: pl.changeInv, prev: pp?.changeInv },
+        ...(pl.mfg ? [
+            { label: 'Cost of materials consumed', ind: 'ind', note: `Opening ${num(pl.rawOpen)} + purchases ${num(t(pl, 'purchases'))} − closing ${num(pl.rawClose)}`, cur: pl.materials, prev: pp?.materials, details: mergeDetails(pl.purchases, pp?.purchases) },
+            { label: 'Changes in inventories of finished goods and stock-in-trade', ind: 'ind', cur: pl.changeFg, prev: pp?.changeFg }
+        ] : [
+            { label: 'Purchases of stock-in-trade', ind: 'ind', cur: t(pl, 'purchases'), prev: t(pp, 'purchases'), details: mergeDetails(pl.purchases, pp?.purchases) },
+            { label: 'Changes in inventories of stock-in-trade', ind: 'ind', note: `Opening ${num(pl.openStock)} − closing ${num(pl.closeStock)}`, cur: pl.changeInv, prev: pp?.changeInv }
+        ]),
         { label: 'Employee benefits expense', ind: 'ind', cur: t(pl, 'employee'), prev: t(pp, 'employee'), details: mergeDetails(pl.employee, pp?.employee) },
         { label: 'Finance costs', ind: 'ind', cur: t(pl, 'finance'), prev: t(pp, 'finance'), details: mergeDetails(pl.finance, pp?.finance) },
         { label: 'Depreciation and amortisation expense', ind: 'ind', cur: t(pl, 'dep'), prev: t(pp, 'dep'), details: mergeDetails(pl.dep, pp?.dep) },
@@ -3750,7 +4758,7 @@ function rptBS() {
         line('(a) Property, plant and equipment', 'nca_ppe'),
         line('(b) Non-current investments', 'nca_invest'),
         { label: '(2) Current assets', cur: b.ca, prev: p?.ca, cls: 'sub' },
-        line('(a) Inventories', 'ca_inventory', 'At weighted average cost'),
+        line('(a) Inventories', 'ca_inventory', isManufacturer() ? 'Raw materials and finished goods, at cost (AS 2)' : 'At weighted average cost'),
         line('(b) Trade receivables', 'ca_receivables'),
         line('(c) Cash and cash equivalents', 'ca_cash'),
         line('(d) Short-term loans and advances', 'ca_loans', 'Incl. TDS receivable'),
@@ -3898,17 +4906,26 @@ function viewGst(tab) {
     if (!months.includes(gstMonth)) gstMonth = months.at(-1) || ymOf(todayISO());
     const ym = gstMonth;
     const filed = t => co.filings.find(f => f.type === t && (f.period === ym || f.period === `${quarterOf(ym)}-${fyOf(ym + '-01')}`));
-    const tabs = [['r1', 'GSTR-1'], ['r3b', 'GSTR-3B'], ['2b', 'GSTR-2B / IMS'], ['ein', 'e-Invoice & e-Way bill'], ['health', 'Pre-filing check']];
+    const tabs = [['plan', 'This month: what to do'], ['r1', 'GSTR-1'], ['2b', 'GSTR-2B / IMS'], ['r3b', 'GSTR-3B'], ['gstr9', 'GSTR-9 annual'], ['ein', 'e-Invoice & e-Way bill'], ['health', 'Pre-filing check']];
     const head = pageHead('GST', `Returns are built from your invoices and bills. ${co.profile.gstin ? `GSTIN ${esc(co.profile.gstin)}` : '<b>Add your GSTIN in Settings.</b>'}`, `<select onchange="gstMonth=this.value;route()">${months.map(m => opt(m, ymLabel(m), ym)).join('')}</select>`)
-        + `<div class="tabs">${tabs.map(([k, l]) => `<a href="#/gst/${k}" class="${tab === k ? 'on' : ''} ${k === '2b' ? 'adv' : ''}">${l}</a>`).join('')}</div>`;
+        + `<div class="tabs">${tabs.map(([k, l]) => `<a href="#/gst/${k}" class="${tab === k ? 'on' : ''}">${l}</a>`).join('')}</div>`;
     let body = '';
     const sumRow = (label, o) => `<tr><td>${label}</td>${amtCell(o.txval ?? '')}${amtCell(o.iamt)}${amtCell(o.camt)}${amtCell(o.samt)}</tr>`;
-    if (tab === 'r1') {
+    const steps = (list) => `<ol class="steps">${list.map(x => `<li>${x}</li>`).join('')}</ol>`;
+    if (tab === 'plan') {
+        const A = gstAdvice(ym);
+        const lv = { bad: 'bad', warn: 'warn', info: '', good: '' };
+        body = `<div class="card"><h2>GST for ${ymLabel(ym)} — step by step</h2>${A.map(a => `<a class="alert ${lv[a.level]}" href="${a.route}" style="text-decoration:none;color:inherit;align-items:flex-start"><span class="dot" ${a.level === 'good' ? 'style="background:var(--good)"' : ''}></span><span class="t"><b>${esc(a.text)}</b><small style="white-space:normal">${esc(a.how)}</small></span></a>`).join('') || '<p class="note">Nothing to do for this month.</p>'}</div>
+            <div class="card"><h2>The monthly routine</h2>${steps(['Sales and purchase bills are posted as they happen (scan them or key them in).', '<b>11th</b> — GSTR-1: open the GSTR-1 tab, download the JSON, upload it on the portal and file. Enter the ARN here.', '<b>14th</b> — GSTR-2B is ready on the portal: download the JSON and import it on the GSTR-2B tab. Accept or reject in IMS as suggested.', '<b>20th</b> — GSTR-3B: the GSTR-3B tab shows every box. Check it against the portal\'s auto-filled return, pay the cash part (PMT-06 challan), file, then press "Post set-off journal" and record the payment here.'])}</div>`;
+    } else if (tab === 'gstr9') {
+        body = gstr9Html(state.fy);
+    } else if (tab === 'r1') {
         const g = gstr1(ym);
         const sec = (title, rows) => rows.length ? `<h2 style="margin-top:14px">${title} <span class="badge">${rows.length}</span></h2><div class="tw"><table class="t"><thead><tr><th>No.</th><th>Date</th><th>Party</th><th>GSTIN</th><th>POS</th><th class="n">Value</th><th class="n">Taxable</th><th class="n">Tax</th></tr></thead><tbody>${rows.map(r => `<tr class="click" onclick="go('#/v/${r.v.id}')"><td>${esc(r.v.no)}</td><td>${fmtDate(r.v.date)}</td><td>${esc(r.party?.name)}</td><td>${esc(r.party?.gstin || '')}</td><td>${esc(r.v.pos)}</td><td class="n">${num(r.val)}</td><td class="n">${num(r.v.totals.taxable)}</td><td class="n">${num(r.v.totals.tax)}</td></tr>`).join('')}</tbody></table></div>` : '';
         body = `<div class="card"><div class="row" style="justify-content:space-between"><div>${filed('GSTR-1') ? `<span class="badge good">Filed ${fmtDate(filed('GSTR-1').filedOn)} · ${esc(filed('GSTR-1').ref)}</span> Invoices of this month are locked.` : `<span class="badge warn">Not filed</span> Due ${fmtDate(`${addMonths(ym, 1)}-11`)}`}</div>
             <div class="row"><button class="btn btn-s btn-sm" onclick="if (gate('gstFiling')) download('GSTR1_${co.profile.gstin}_${ym.slice(5)}${ym.slice(0, 4)}.json', JSON.stringify(gstr1Json('${ym}'), null, 1), 'application/json')">${ic('dl')} JSON for GST portal</button>${!filed('GSTR-1') && canEdit() ? `<button class="btn btn-p btn-sm" onclick="fileReturn('GSTR-1','${ym}')">Mark as filed</button>` : ''}</div></div>
-            <p class="note" style="margin-top:8px">${g.summary.invoices} invoice(s), ${g.summary.notes} credit note(s), taxable value ${inr(g.summary.taxable)}. Upload the JSON in the GST offline tool or portal and verify before filing.</p>
+            <p class="note" style="margin-top:8px">${g.summary.invoices} invoice(s), ${g.summary.notes} credit note(s), taxable value ${inr(g.summary.taxable)}.</p>
+            ${filed('GSTR-1') ? '' : steps(['Press <b>JSON for GST portal</b> above.', 'On <a href="https://services.gst.gov.in/services/login" target="_blank" rel="noopener">gst.gov.in</a>: Returns Dashboard → choose the period → GSTR-1 → <b>Prepare offline</b> → Upload → choose the file. Wait for "Processed".', 'Open <b>Prepare online</b> to see the summary; it should match the tables below.', 'File with DSC or EVC, copy the ARN, and press <b>Mark as filed</b> here.'])}
             ${sec('4A · B2B and SEZ invoices', g.b2b)}${sec('5 · B2C large (inter-state above ₹1 lakh)', g.b2cl)}${sec('6A · Exports', g.exp)}${sec('9B · Credit notes to registered parties', g.cdnr)}${sec('9B · Credit notes to unregistered', g.cdnur)}
             ${g.b2cs.length ? `<h2 style="margin-top:14px">7 · B2C others (summary)</h2><div class="tw"><table class="t"><thead><tr><th>POS</th><th>Type</th><th class="n">Rate</th><th class="n">Taxable</th><th class="n">IGST</th><th class="n">CGST</th><th class="n">SGST</th></tr></thead><tbody>${g.b2cs.map(b => `<tr><td>${esc(stateName(b.pos))}</td><td>${b.sply}</td><td class="n">${b.rt}%</td>${amtCell(b.txval)}${amtCell(b.iamt)}${amtCell(b.camt)}${amtCell(b.samt)}</tr>`).join('')}</tbody></table></div>` : ''}
             ${[['12 · HSN summary – B2B', g.hsnB2B], ['12 · HSN summary – B2C', g.hsnB2C]].map(([t, l]) => l.length ? `<h2 style="margin-top:14px">${t}</h2><div class="tw"><table class="t"><thead><tr><th>HSN</th><th>UQC</th><th class="n">Rate</th><th class="n">Qty</th><th class="n">Taxable</th><th class="n">IGST</th><th class="n">CGST</th><th class="n">SGST</th></tr></thead><tbody>${l.map(h => `<tr><td>${esc(h.hsn)}</td><td>${esc(h.uqc)}</td><td class="n">${h.rt}%</td><td class="n">${r2(h.qty)}</td>${amtCell(h.txval)}${amtCell(h.iamt)}${amtCell(h.camt)}${amtCell(h.samt)}</tr>`).join('')}</tbody></table></div>` : '').join('')}
@@ -3918,19 +4935,22 @@ function viewGst(tab) {
         const s = g.setoff;
         body = `<div class="card"><div class="row" style="justify-content:space-between"><div>${filed('GSTR-3B') ? `<span class="badge good">Filed ${fmtDate(filed('GSTR-3B').filedOn)} · ${esc(filed('GSTR-3B').ref)}</span>` : `<span class="badge warn">Not filed</span> Due ${fmtDate(`${addMonths(ym, 1)}-20`)}`}</div>
             <div class="row">${canEdit() ? `<button class="btn btn-s btn-sm" onclick="doSetOff('${ym}')">Post set-off journal</button><button class="btn btn-s btn-sm" onclick="payGst('${ym}')">Pay GST (cash ledger)</button>` : ''}${!filed('GSTR-3B') && canEdit() ? `<button class="btn btn-p btn-sm" onclick="fileReturn('GSTR-3B','${ym}')">Mark as filed</button>` : ''}</div></div>
-            <p class="note" style="margin:8px 0">Outward tax liability in GSTR-3B is now auto-filled from GSTR-1 and locked, so GSTR-1 must be right first (correct mistakes through GSTR-1A).</p>
+            <div class="${g.basis === '2B' ? 'note' : 'warns'}" style="margin:8px 0">${g.basis === '2B' ? `✓ Input credit is taken from GSTR-2B.${g.deferred.iamt + g.deferred.camt + g.deferred.samt ? ` ${inr(g.deferred.iamt + g.deferred.camt + g.deferred.samt)} of this month's bills is not in 2B yet and is carried forward until it appears.` : ''}` : 'GSTR-2B is not imported for this month, so input credit is shown as per your books. Import 2B to claim only what is legally available.'}</div>
+            <div class="row" style="margin:6px 0 10px"><button class="btn btn-s btn-sm" onclick="download('GSTR3B_${co.profile.gstin}_${ym.slice(5)}${ym.slice(0, 4)}.json', JSON.stringify(gstr3bJson('${ym}'), null, 1), 'application/json')">${ic('dl')} GSTR-3B data (JSON)</button><button class="btn btn-s btn-sm" onclick="printReport('g3T','GSTR-3B ${ymLabel(ym)}')">${ic('print')} Print worksheet</button></div>
+            ${filed('GSTR-3B') ? '' : steps(['On the portal, open GSTR-3B for the period. Outward tax (3.1) is filled from your GSTR-1 and locked; credit (4) is filled from GSTR-2B.', 'Compare each box with this screen. Change table 4 if needed (for example credit held back here because it is not in 2B).', `Create the challan for the cash part (${inr(s.totalCash)}), pay it, then <b>Offset liability</b> and file with DSC / EVC.`, 'Here: press <b>Post set-off journal</b>, record the cash payment with <b>Pay GST</b>, and <b>Mark as filed</b> with the ARN.'])}
+            <p class="note" style="margin:8px 0">The GST portal does not accept a GSTR-3B file upload from taxpayers — it fills the return for you. The JSON is for GST Suvidha Providers and tax-professional software.</p><div id="g3T">
             <h2>3.1 Outward and inward supplies liable to reverse charge</h2><div class="tw"><table class="t"><thead><tr><th>Nature</th><th class="n">Taxable</th><th class="n">IGST</th><th class="n">CGST</th><th class="n">SGST</th></tr></thead><tbody>
             ${sumRow('(a) Outward taxable supplies', g.a)}${sumRow('(b) Zero-rated (export / SEZ)', g.b)}${sumRow('(c) Nil-rated / exempt', g.c)}${sumRow('(d) Inward supplies under reverse charge', g.d)}</tbody></table></div>
             ${g.interUnreg.length ? `<h2 style="margin-top:14px">3.2 Inter-state supplies to unregistered persons</h2><div class="tw"><table class="t"><thead><tr><th>Place of supply</th><th class="n">Taxable</th><th class="n">IGST</th></tr></thead><tbody>${g.interUnreg.map(x => `<tr><td>${esc(stateName(x.pos))}</td>${amtCell(x.txval)}${amtCell(x.iamt)}</tr>`).join('')}</tbody></table></div>` : ''}
             <h2 style="margin-top:14px">4. Eligible ITC</h2><div class="tw"><table class="t"><thead><tr><th>Details</th><th class="n"></th><th class="n">IGST</th><th class="n">CGST</th><th class="n">SGST</th></tr></thead><tbody>
-            ${sumRow('A(3) Inward supplies under reverse charge', { ...g.itcRcm, txval: '' })}${sumRow('A(5) All other ITC', { ...g.itcOther, txval: '' })}${sumRow('B(2) Reversed (debit notes / returns)', { ...g.reversal, txval: '' })}${sumRow('Credit brought forward from earlier months', { ...g.carryIn, txval: '' })}${sumRow('C. Net ITC available', { ...g.itcNet, txval: '' })}${sumRow('D. Ineligible ITC (section 17(5))', { ...g.ineligible, txval: '' })}</tbody></table></div>
+            ${sumRow('A(3) Inward supplies under reverse charge', { ...g.itcRcm, txval: '' })}${sumRow(`A(5) All other ITC${g.basis === '2B' ? ' (as per GSTR-2B)' : ''}`, { ...g.itcOther, txval: '' })}${sumRow('B(2) Reversed (debit notes / returns)', { ...g.reversal, txval: '' })}${sumRow('Credit brought forward from earlier months', { ...g.carryIn, txval: '' })}${sumRow('C. Net ITC available', { ...g.itcNet, txval: '' })}${sumRow('D. Ineligible ITC (section 17(5))', { ...g.ineligible, txval: '' })}</tbody></table></div>
             <h2 style="margin-top:14px">6.1 Payment of tax</h2><div class="tw"><table class="t"><thead><tr><th></th><th class="n">IGST</th><th class="n">CGST</th><th class="n">SGST</th></tr></thead><tbody>
             <tr><td>Tax payable (other than reverse charge)</td>${amtCell(g.liab.iamt)}${amtCell(g.liab.camt)}${amtCell(g.liab.samt)}</tr>
             <tr><td>Paid through ITC</td>${amtCell(s.use.iamt.iamt + s.use.camt.iamt + s.use.samt.iamt)}${amtCell(s.use.iamt.camt + s.use.camt.camt)}${amtCell(s.use.iamt.samt + s.use.samt.samt)}</tr>
             <tr><td>Reverse charge (cash only)</td>${amtCell(g.rcmLiab.iamt)}${amtCell(g.rcmLiab.camt)}${amtCell(g.rcmLiab.samt)}</tr>
             <tr class="grand"><td>Pay in cash</td>${amtCell(s.cash.iamt)}${amtCell(s.cash.camt)}${amtCell(s.cash.samt)}</tr>
             <tr><td>ITC carried forward</td>${amtCell(s.carry.iamt)}${amtCell(s.carry.camt)}${amtCell(s.carry.samt)}</tr></tbody></table></div>
-            <p class="note" style="margin-top:8px">Set-off follows Rule 88A: IGST credit first, then CGST and SGST credit; CGST credit is never used for SGST or the other way round. Credit not used in earlier months is brought forward from the input GST ledgers, so post the set-off journal every month.</p></div>`;
+            </div><p class="note" style="margin-top:8px">Set-off follows Rule 88A: IGST credit first, then CGST and SGST credit; CGST credit is never used for SGST or the other way round. Credit not used in earlier months is brought forward from the input GST ledgers, so post the set-off journal every month.</p></div>`;
     } else if (tab === '2b' && !hasFeature('recon2b')) {
         body = `<div class="empty"><div style="font-size:28px">🔒</div><b style="display:block;margin:6px 0">GSTR-2B / IMS matching is in the Professional plan</b><p class="note" style="margin-bottom:12px">You are on ${esc(planStatus())}.</p><a class="btn btn-p" href="#/billing">See plans</a></div>`;
     } else if (tab === '2b') {
@@ -3938,10 +4958,11 @@ function viewGst(tab) {
         const cnt = s => rec.filter(x => x.status === s).length;
         body = `<div class="card"><h2>Import GSTR-2B for ${ymLabel(ym)}</h2><div class="row"><input type="file" id="b2file" accept=".json,.csv"><button class="btn btn-p btn-sm" onclick="do2b()">Import & match</button><button class="btn btn-g btn-sm" onclick="download('gstr2b-sample.csv', sample2bCsv('${ym}'), 'text/csv')">Sample CSV</button></div>
             <p class="note" style="margin-top:6px">Download the 2B JSON from the GST portal (Returns → GSTR-2B), or a CSV with GSTIN, invoice no., date, taxable, IGST, CGST, SGST.</p></div>
-            <div class="card"><div class="row" style="margin-bottom:10px"><span class="badge good">${cnt('Matched')} matched</span><span class="badge warn">${cnt('Mismatch')} mismatch</span><span class="badge bad">${cnt('Only in books')} only in books</span><span class="badge info">${cnt('Only in 2B')} only in 2B</span></div>
-            <div class="tw"><table class="t" id="b2T"><thead><tr><th>Status</th><th>Supplier</th><th>Invoice</th><th class="n">Tax in books</th><th class="n">Tax in 2B</th><th>Note</th><th>IMS action</th></tr></thead><tbody>
-            ${rec.map(x => `<tr><td><span class="badge ${{ Matched: 'good', Mismatch: 'warn', 'Only in books': 'bad', 'Only in 2B': 'info' }[x.status]}">${x.status}</span></td><td>${esc(x.v ? contactById(x.v.partyId)?.name : x.r.name || x.r.gstin)}</td><td>${x.v ? `<a href="#/v/${x.v.id}">${esc(x.v.refNo)}</a>` : esc(x.r.inv)}</td><td class="n">${x.bookTax != null ? num(x.bookTax) : '—'}</td><td class="n">${x.portalTax != null ? num(x.portalTax) : '—'}</td><td class="note">${esc(x.note)}</td>
-                <td>${x.r ? `<select onchange="setIms('${x.r.id}',this.value)" ${canEdit() ? '' : 'disabled'}>${['Pending', 'Accepted', 'Rejected'].map(s => opt(s, s, x.r.ims)).join('')}</select>` : '—'}</td></tr>`).join('') || '<tr><td colspan="7" class="muted" style="text-align:center;padding:20px">No bills or 2B data for this month.</td></tr>'}
+            <div class="card"><div class="row" style="margin-bottom:10px"><span class="badge good">${cnt('Matched')} matched</span><span class="badge warn">${cnt('Mismatch')} mismatch</span><span class="badge bad">${cnt('Only in books')} only in books</span><span class="badge info">${cnt('Only in 2B')} only in 2B</span>${cnt('Earlier bill, now in 2B') ? `<span class="badge good">${cnt('Earlier bill, now in 2B')} earlier bills now claimable</span>` : ''}</div>
+            ${rec.length ? `<div class="kpi" style="margin-bottom:12px;--c:var(--good)"><div class="v">${inr0(sum(rec.filter(x => x.claim), x => x.claim.iamt + x.claim.camt + x.claim.samt))}</div><div class="l">Input credit you can claim in GSTR-3B for ${ymLabel(ym)}</div><div class="s">Held back: ${inr0(sum(rec.filter(x => x.v && !x.claim), x => x.bookTax))} (not yet in 2B or rejected)</div></div>` : ''}
+            <div class="tw"><table class="t" id="b2T"><thead><tr><th>Status</th><th>Supplier</th><th>Invoice</th><th class="n">Tax in books</th><th class="n">Tax in 2B</th><th class="n">Claim now</th><th>What to do</th><th>IMS action</th></tr></thead><tbody>
+            ${rec.map(x => `<tr><td><span class="badge ${{ Matched: 'good', Mismatch: 'warn', 'Only in books': 'bad', 'Only in 2B': 'info', 'Earlier bill, now in 2B': 'good' }[x.status]}">${x.status}</span></td><td>${esc(x.v ? contactById(x.v.partyId)?.name : x.r.name || x.r.gstin)}</td><td>${x.v ? `<a href="#/v/${x.v.id}">${esc(x.v.refNo)}</a>` : esc(x.r.inv)}</td><td class="n">${x.bookTax != null ? num(x.bookTax) : '—'}</td><td class="n">${x.portalTax != null ? num(x.portalTax) : '—'}</td><td class="n">${x.claim ? num(x.claim.iamt + x.claim.camt + x.claim.samt) : '—'}</td><td class="note" style="white-space:normal;min-width:220px">${x.note ? esc(x.note) + '<br>' : ''}<b>${esc(x.action || '')}</b>${x.status === 'Only in 2B' && canEdit() ? `<br><button class="link" onclick="billFrom2b('${x.r.id}')">Enter this bill</button>` : ''}${x.status === 'Only in books' && contactById(x.v.partyId)?.phone ? `<br><a class="link" target="_blank" rel="noopener" href="https://wa.me/91${contactById(x.v.partyId).phone}?text=${encodeURIComponent(`Dear ${contactById(x.v.partyId).name}, your invoice ${x.v.refNo} dated ${fmtDate(x.v.refDate || x.v.date)} for ${inr(x.v.totals.total)} is not in our GSTR-2B. Kindly report it in your GSTR-1 / IFF. – ${co.profile.name}`)}">Remind on WhatsApp</a>` : ''}</td>
+                <td>${x.r ? `<select onchange="setIms('${x.r.id}',this.value)" ${canEdit() ? '' : 'disabled'}>${['Pending', 'Accepted', 'Rejected'].map(s => opt(s, s, x.r.ims)).join('')}</select>` : '—'}</td></tr>`).join('') || '<tr><td colspan="8" class="muted" style="text-align:center;padding:20px">No bills or 2B data for this month.</td></tr>'}
             </tbody></table></div><p class="note" style="margin-top:8px">ITC can be claimed only for invoices that appear in GSTR-2B (section 16(2)(aa)). In IMS, accept what is correct, reject what is not yours or wrong, and keep pending what you will decide later.</p></div>`;
     } else if (tab === 'ein') {
         const list = co.vouchers.filter(v => ['SI', 'CN'].includes(v.type) && ymOf(v.date) === ym && v.status !== 'cancelled');
@@ -4047,9 +5068,26 @@ function viewTds() {
     $('#view').innerHTML = head + body;
 }
 function payTax(kind, ym, amt) {
-    F = null;
-    viewVoucherForm({ type: 'PY', ledgerId: sysId(TAX_KIND[kind].ledger), taxMonth: ym, amount: Math.round(amt), accountId: cashBankAccounts().find(a => a.group === 'bank')?.id || sysId('cash'), narration: `${TAX_KIND[kind].label} deposited for ${ymLabel(ym)} (challan ITNS 281, tax year ${fyLabel(fyOf(ym + '-01'))})` });
-    history.replaceState(null, '', '#/new/PY');
+    const K = TAX_KIND[kind], R = taxRegister(kind, fyOf(ym + '-01'));
+    const m = R.months.find(x => x.ym === ym);
+    const byCode = {};
+    R.rows.filter(r => r.month === ym).forEach(r => { const k = `${r.code} · ${K.codes[r.section]?.old} · ${K.codes[r.section]?.label}`; byCode[k] = (byCode[k] || 0) + r.amount; });
+    const interest = m?.interest || 0;
+    modal({
+        title: `Pay ${K.label} for ${ymLabel(ym)}`,
+        body: `<div class="kpi" style="--c:var(--brand);margin-bottom:12px"><div class="v">${inr(Math.round(amt))}</div><div class="l">To pay now${interest ? ` (includes interest ${inr(interest)})` : ''}</div><div class="s">Due ${fmtDate(m?.due || depositDue(ym))}</div></div>
+            <dl class="found"><dt>TAN</dt><dd>${esc(co.profile.tan || 'Add your TAN in Settings → GST & TDS')}</dd><dt>Tax year</dt><dd>${fyLabel(fyOf(ym + '-01'))}</dd><dt>Type of payment</dt><dd>${kind === 'tds' ? 'TDS' : 'TCS'} payable by taxpayer (minor head 200)</dd></dl>
+            <div class="tw" style="margin:10px 0"><table class="t"><thead><tr><th>Payment code</th><th class="n">Amount</th></tr></thead><tbody>${Object.entries(byCode).map(([k, v]) => `<tr><td style="white-space:normal">${esc(k)}</td>${amtCell(v)}</tr>`).join('')}${interest ? `<tr><td>Interest (late deposit)</td>${amtCell(interest)}</tr>` : ''}</tbody></table></div>
+            <ol class="steps"><li>Press <b>Open e-Pay Tax</b>. Enter the TAN and the OTP sent to the registered mobile.</li><li>Choose "${kind === 'tds' ? 'TDS / TCS payable by taxpayer (200)' : 'TDS / TCS payable by taxpayer (200)'}", tax year ${fyLabel(fyOf(ym + '-01'))}, and the payment codes above with their amounts.</li><li>Pay by net banking, UPI or card. Download the challan receipt.</li><li>Come back and press <b>Record the challan</b>: enter the BSR code and challan serial number from the receipt.</li></ol>
+            <p class="note">TRACES is not used for paying. After the quarterly return is filed, TRACES is where you download Form ${K.cert.split(' ')[0]} certificates.</p>`,
+        foot: `<a class="btn btn-s" href="https://eportal.incometax.gov.in/iec/foservices/#/e-pay-tax-prelogin/user-details" target="_blank" rel="noopener">Open e-Pay Tax ↗</a><button class="btn btn-p" id="ptRec">Record the challan</button>`,
+        onOpen: () => $('#ptRec').onclick = () => {
+            closeModal();
+            F = null;
+            viewVoucherForm({ type: 'PY', ledgerId: sysId(K.ledger), taxMonth: ym, amount: Math.round(amt), accountId: cashBankAccounts().find(a => a.group === 'bank')?.id || sysId('cash'), narration: `${K.label} deposited for ${ymLabel(ym)} (challan, tax year ${fyLabel(fyOf(ym + '-01'))})` });
+            history.replaceState(null, '', '#/new/PY');
+        }
+    });
 }
 const payTds = (ym, amt) => payTax('tds', ym, amt);
 
@@ -4386,7 +5424,9 @@ async function importAll() {
     if (data.app !== 'we-create-erp') return alert('This is not a We Create ERP backup.');
     if (!await ask({ title: 'Restore backup', message: `Replace everything in this browser with the backup from ${new Date(data.at).toLocaleString('en-IN')}? You will need to sign in again.`, ok: 'Restore', danger: true })) return;
     Object.keys(localStorage).filter(k => k.startsWith('wcerp.')).forEach(k => localStorage.removeItem(k));
-    Object.entries(data.companies).forEach(([id, c]) => c && safeSet(coKey(id), JSON.stringify(c)));
+    store.ids().forEach(id => store.del(id));
+    Object.entries(data.companies).forEach(([id, c]) => c && store.put(id, JSON.stringify(c)));
+    await store.flush();
     meta = data.meta;
     auditPush(meta.audit, 'Backup restored', { entity: 'System', ref: data.at });
     saveMeta();
@@ -4399,9 +5439,48 @@ async function removeCompany() {
     if (name === null) return;
     if (name !== co.profile.name) return alert('The name did not match. Nothing was removed.');
     auditMeta('Company removed from this browser', { entity: 'Company', ref: co.profile.name });
-    localStorage.removeItem(coKey(co.id));
+    store.del(co.id);
     meta.companies = meta.companies.filter(c => c.id !== co.id);
     saveMeta(); co = null; go('#/companies');
+}
+
+function billFrom2b(id) {
+    const r = co.gstr2b.find(x => x.id === id);
+    if (!r) return;
+    let ct = co.contacts.find(c => c.gstin === r.gstin);
+    try { if (!ct) ct = saveContact({ type: 'vendor', name: r.name || `Supplier ${r.gstin}`, gstin: r.gstin, state: r.gstin.slice(0, 2), creditDays: 30 }); } catch (e) { return alert(e.message); }
+    const rate = r.taxable ? GST_RATES.reduce((b, x) => Math.abs(r.taxable * x / 100 - (r.igst + r.cgst + r.sgst)) < Math.abs(r.taxable * b / 100 - (r.igst + r.cgst + r.sgst)) ? x : b, 0) : 18;
+    F = null;
+    viewVoucherForm({ type: 'PB', partyId: ct.id, refNo: r.inv, date: r.date && r.date <= todayISO() ? r.date : todayISO(), pos: companyState(), lines: [{ itemId: '', desc: 'As per supplier invoice (from GSTR-2B)', hsn: '', qty: 1, unit: 'NOS', rate: r.taxable, disc: 0, gstRate: rate, accId: ct.lastAcc || '' }] });
+    history.replaceState(null, '', '#/new/PB');
+}
+function gstr9Html(fy) {
+    const g = gstr9(fy);
+    const row = (tbl, label, t, cls = '') => `<tr class="${cls}"><td>${tbl}</td><td style="white-space:normal">${label}</td>${amtCell(t.txval ?? 0)}${amtCell(t.iamt)}${amtCell(t.camt)}${amtCell(t.samt)}</tr>`;
+    const head = `<thead><tr><th>Table</th><th>Particulars</th><th class="n">Taxable</th><th class="n">IGST</th><th class="n">CGST</th><th class="n">SGST</th></tr></thead>`;
+    const filed = co.filings.find(f => f.type === 'GSTR-9' && f.period === `FY-${fy}`);
+    const diff6 = r2((g.avail.iamt + g.avail.camt + g.avail.samt) - (g.t6total.iamt + g.t6total.camt + g.t6total.samt));
+    const diff8 = g.months2b.length ? r2((g.in2b.iamt + g.in2b.camt + g.in2b.samt) - (g.books2b.iamt + g.books2b.camt + g.books2b.samt)) : 0;
+    return `<div class="card"><div class="row" style="justify-content:space-between"><div><h2 style="margin:0">GSTR-9 · FY ${fyLabel(fy)}</h2><div class="note">Due ${fmtDate(g.due)}${filed ? ` · <span class="badge good">Filed ${fmtDate(filed.filedOn)}</span>` : ''} · ${g.months.length} month(s) in the books</div></div>
+        <div class="row"><button class="btn btn-s btn-sm" onclick="download('GSTR9_${co.profile.gstin}_FY${fyLabel(fy)}.csv','﻿'+gstr9Csv(${fy}),'text/csv')">${ic('dl')} Excel (CSV) for the offline tool</button><button class="btn btn-s btn-sm" onclick="printReport('g9T','GSTR-9 FY ${fyLabel(fy)}')">${ic('print')} Print</button>${!filed && canEdit() ? `<button class="btn btn-p btn-sm" onclick="calFile('GSTR-9','FY-${fy}')">Mark as filed</button>` : ''}</div></div>
+        <ol class="steps" style="margin-top:10px"><li>File every GSTR-1 and GSTR-3B of the year first.</li><li>On the portal open GSTR-9: most tables are filled from your returns. Download the "system computed" PDF.</li><li>Compare each table with this screen; enter differences (the CSV matches the offline tool's sheets).</li><li>Check the warnings below, pay any extra tax with DRC-03, file with DSC / EVC, then mark it filed here.</li></ol>
+        ${Math.abs(diff6) > 1 ? `<div class="warns">Table 6J: credit availed in GSTR-3B differs from the bills by ${inr(diff6)}. Check reversals and credit claimed in a later month.</div>` : ''}
+        ${g.months2b.length < g.months.length ? `<div class="note" style="margin:8px 0">Table 8 (credit as per GSTR-2B): 2B imported for ${g.months2b.length} of ${g.months.length} month(s). Import the rest on the GSTR-2B tab to complete the comparison.</div>` : ''}
+        ${Math.abs(diff8) > 1 ? `<div class="warns">Table 8D: GSTR-2B shows ${inr(Math.abs(diff8))} ${diff8 > 0 ? 'more' : 'less'} credit than your bills for the ${g.months2b.length} month(s) with 2B imported.${diff8 > 0 ? ' Unclaimed credit lapses after 30 November.' : ' Credit taken without 2B support may have to be reversed with interest.'}</div>` : ''}
+        ${g.needs9c ? `<div class="warns">Turnover above ₹5 crore: GSTR-9C (self-certified reconciliation) is also needed. Turnover in the books ${inr(g.booksTurnover)} vs declared ${inr(g.turnover)}: difference ${inr(g.booksTurnover - g.turnover)} (credit notes, unbilled revenue or other income explain most differences).</div>` : ''}
+        <div class="tw" id="g9T"><table class="t">${head}<tbody>
+        <tr class="head"><td colspan="6">Pt II · Outward supplies on which tax is payable (table 4)</td></tr>
+        ${row('4A', 'Supplies to unregistered persons (B2C)', g.T4.A)}${row('4B', 'Supplies to registered persons (B2B)', g.T4.B)}${row('4C', 'Exports on payment of tax', g.T4.C)}${row('4D', 'SEZ supplies on payment of tax', g.T4.D)}${row('4G', 'Inward supplies on reverse charge', g.T4.G)}${row('4I', 'Credit notes (−)', g.T4.I)}${row('4N', 'Total', g.T4.N, 'sub')}
+        <tr class="head"><td colspan="6">Outward supplies on which tax is not payable (table 5)</td></tr>
+        ${row('5A', 'Exports without payment of tax', g.T5.A)}${row('5B', 'SEZ supplies without payment of tax', g.T5.B)}${row('5E', 'Exempted / nil rated', g.T5.E)}${row('5H', 'Credit notes (−)', g.T5.H)}${row('5N', 'Total', g.T5.N, 'sub')}
+        <tr class="grand"><td>5N+4N</td><td>Total turnover</td>${amtCell(g.turnover)}<td></td><td></td><td></td></tr>
+        <tr class="head"><td colspan="6">Pt III · Input tax credit (tables 6–8)</td></tr>
+        ${row('6A', 'Total credit availed through GSTR-3B', g.avail, 'sub')}${row('6B', 'Inputs', g.T6.inputs)}${row('6B', 'Capital goods', g.T6.capital)}${row('6B', 'Input services', g.T6.services)}${row('6C', 'Reverse charge – unregistered suppliers', g.T6.rcmUnreg)}${row('6D', 'Reverse charge – registered suppliers', g.T6.rcmReg)}${row('6O', 'Total (6B–6H)', g.t6total, 'sub')}
+        ${row('7', 'Credit reversed (debit notes)', g.T7)}${row('8A', 'Credit as per GSTR-2B', g.in2b)}
+        <tr class="head"><td colspan="6">Pt IV · Tax paid (table 9)</td></tr>
+        ${row('9', 'Tax payable', g.pay.payable)}${row('9', 'Paid through credit', g.pay.itc)}${row('9', 'Paid in cash', g.pay.cash)}
+        </tbody></table></div>
+        <h2 style="margin-top:14px">Table 17 · HSN summary of outward supplies</h2><div class="tw"><table class="t"><thead><tr><th>HSN</th><th>UQC</th><th class="n">Rate</th><th class="n">Qty</th><th class="n">Taxable</th><th class="n">IGST</th><th class="n">CGST</th><th class="n">SGST</th></tr></thead><tbody>${g.hsn.map(h => `<tr><td>${esc(h.hsn)}</td><td>${esc(h.uqc)}</td><td class="n">${h.rt}%</td><td class="n">${r2(h.qty)}</td>${amtCell(h.txval)}${amtCell(h.iamt)}${amtCell(h.camt)}${amtCell(h.samt)}</tr>`).join('')}</tbody></table></div></div>`;
 }
 
 </script>
@@ -4478,6 +5557,10 @@ function createSampleCompany() {
         landlord: ct({ type: 'vendor', name: 'Shanthi Properties', pan: 'AAAPS1234B', state: '33', city: 'Chennai', tdsSection: '194I-B', creditDays: 5 }),
         airtel: ct({ type: 'vendor', name: 'Bharti Airtel Ltd', gstin: makeGstin('33', 'AAACB2894G'), state: '33', city: 'Chennai', creditDays: 15 })
     };
+    // Staff on the payroll (gross ₹90,000 a month)
+    [['Arun Prakash', 'Sales', 'Sales Manager', 22000, 1500, 'ABKPA1234F'], ['Deepa Raman', 'Accounts', 'Accountant', 18000, 0, 'BCRPD4567K'], ['Saravanan K', 'Stores', 'Storekeeper', 15000, 0, ''],
+     ['Meena S', 'Office', 'Billing Executive', 14000, 0, ''], ['Rafiq Ahmed', 'Service', 'Electrician', 12000, 0, ''], ['Kumar V', 'Stores', 'Helper', 9000, 0, '']]
+        .forEach(([name, dept, desig, salary, tds, pan], i) => saveEmployee({ name, dept, desig, salary, tdsMonthly: tds, pan, code: `KE${String(i + 1).padStart(3, '0')}`, doj: `${startFy - 2 - (i % 3)}-0${(i % 9) + 1}-10`, uan: `10${String(1000000000 + i * 7919).slice(0, 10)}`, pf: true, esi: true, basicPct: 50, status: 'Active', source: 'manual' }));
     // Balance the opening position through opening surplus
     const diff = openingDifference();
     const sa = accById(surplus);
@@ -4574,7 +5657,17 @@ function createSampleCompany() {
         payOff(C.ramesh, 26, 20); payOff(C.polycab, 28, 30); payOff(C.landlord, 5, 0); payOff(C.airtel, 28, 0); payOff(C.gta, 20, 3); payOff(C.advocate, 28, 5);
         if (mi === 0 && d(ym, 15)) { const op = Number(contactById(C.ramesh).openCr); sv({ type: 'PY', date: d(ym, 15), accountId: bank, partyId: C.ramesh, amount: op, narration: 'Opening balance cleared' }); sv({ type: 'RC', date: d(ym, 15), accountId: bank, partyId: C.prakash, amount: 120000, narration: 'Opening balance received' }); }
         // ---- running costs ----
-        if (d(ym, 1)) sv({ type: 'PY', date: d(ym, 1), accountId: bank, ledgerId: sysId('salary'), amount: 90000, narration: `Salaries for ${ymLabel(prev)}` });
+        // Payroll for last month: post on the last day, pay on the 1st, PF / ESI by the 14th, salary TDS by the 6th
+        if (d(ym, 1) && prev >= ymOf(co.profile.booksFrom)) {
+            draftRun(prev);
+            postPayroll(prev, { date: lastDay(prev) });
+            paySalaries(prev, bank, d(ym, 1), `SAL${prev.replace('-', '')}`);
+            statDues(fyOf(prev + '-01')).filter(x => x.ym === prev && x.pending > 0.5 && x.k !== 'pt').forEach(x => {
+                const day = x.k === 'tds' ? 6 : 14;
+                if (d(ym, day)) sv({ type: 'PY', date: d(ym, day), accountId: bank, ledgerId: sysId(STAT[x.k].ledger), taxMonth: prev, amount: x.pending, challan: x.k === 'tds' ? { bsr: '0510308', serial: String(between(10000, 99999)) } : undefined, narration: `${STAT[x.k].label} for ${ymLabel(prev)}` });
+            });
+            statDues(fyOf(prev + '-01')).filter(x => x.k === 'pt' && x.ym === prev && x.pending > 0.5).forEach(x => { if (d(ym, 20)) sv({ type: 'PY', date: d(ym, 20), accountId: bank, ledgerId: sysId('ptPay'), taxMonth: prev, amount: x.pending, narration: `Professional tax for the half-year ending ${ymLabel(prev)}` }); });
+        }
         if (d(ym, 10)) sv({ type: 'PY', date: d(ym, 10), accountId: bank, ledgerId: elec, amount: between(9, 16) * 1000, narration: 'TNPDCL electricity bill' });
         if (d(ym, 5)) { sv({ type: 'PY', date: d(ym, 5), accountId: bank, ledgerId: sysId('interest'), amount: 5000, narration: 'Term loan interest' }); sv({ type: 'PY', date: d(ym, 5), accountId: bank, ledgerId: loan, amount: 10000, narration: 'Term loan EMI principal' }); }
         if (d(ym, 29)) {
@@ -4607,7 +5700,7 @@ function createSampleCompany() {
         if (taxRegister('tcs', fyOf(m + '-01')).months.find(x => x.ym === m)?.deducted) markFiled('TCS-PAY', m, `CIN${between(10000000, 99999999)}`, `${addMonths(m, 1)}-06`);
     });
     [startFy, startFy + 1].forEach(fy => {
-        [['Q1', `${fy}-07-31`], ['Q2', `${fy}-10-31`], ['Q3', `${fy + 1}-01-31`], ['Q4', `${fy + 1}-05-31`]].forEach(([q, due]) => { if (due < today) { markFiled('FORM-140', `${q}-${fy}`, `TOKEN${between(100000, 999999)}`, addDays(due, -5)); if (taxRegister('tcs', fy).rows.some(r => QUARTERS[q].includes(Number(r.month.slice(5))))) markFiled('FORM-143', `${q}-${fy}`, `TOKEN${between(100000, 999999)}`, addDays(due, -5)); } });
+        [['Q1', `${fy}-07-31`], ['Q2', `${fy}-10-31`], ['Q3', `${fy + 1}-01-31`], ['Q4', `${fy + 1}-05-31`]].forEach(([q, due]) => { if (due < today) { markFiled('FORM-140', `${q}-${fy}`, `TOKEN${between(100000, 999999)}`, addDays(due, -5)); markFiled('FORM-138', `${q}-${fy}`, `TOKEN${between(100000, 999999)}`, addDays(due, -5)); if (taxRegister('tcs', fy).rows.some(r => QUARTERS[q].includes(Number(r.month.slice(5))))) markFiled('FORM-143', `${q}-${fy}`, `TOKEN${between(100000, 999999)}`, addDays(due, -5)); } });
         [['15%', `${fy}-06-15`], ['45%', `${fy}-09-15`], ['75%', `${fy}-12-15`], ['100%', `${fy + 1}-03-15`]].forEach(([p, due]) => { if (due < today) markFiled('ADV-TAX', `${p}-${fy}`, `CIN${between(10000000, 99999999)}`, due); });
         if (`${fy + 1}-12-31` < today) markFiled('GSTR-9', `FY-${fy}`, 'ARN');
         if (`${fy}-10-31` < today) markFiled('MSME-1', `H1-${fy}`, 'SRN');

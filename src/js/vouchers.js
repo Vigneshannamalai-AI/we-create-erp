@@ -1,7 +1,7 @@
 'use strict';
 // ===================== We Create ERP · vouchers: lists, forms, view, print, scan =====================
 
-const LIST_TYPES = { sales: ['SI'], purchases: ['PB'], notes: ['CN', 'DN'], receipts: ['RC'], payments: ['PY'], journals: ['JV', 'CT'] };
+const LIST_TYPES = { sales: ['SI'], purchases: ['PB'], notes: ['CN', 'DN'], receipts: ['RC'], payments: ['PY'], journals: ['JV', 'CT', 'SJ'] };
 const LIST_TITLE = { sales: 'Sales invoices', purchases: 'Purchase bills', notes: 'Credit & debit notes', receipts: 'Receipts', payments: 'Payments', journals: 'Journal & contra' };
 let listFilter = { month: '', status: '' };
 let F = null;              // the voucher being edited
@@ -33,7 +33,7 @@ function viewVoucherList(kind) {
         purchases: 'Supplier bills. Input GST, reverse charge and TDS are calculated and posted automatically; bills are matched against GSTR-2B.',
         notes: 'Credit notes reduce a sale (returns, discounts); debit notes reduce a purchase. They must point to the original document.',
         receipts: 'Money received, settled against open invoices bill by bill.', payments: 'Money paid, settled against open bills; pay TDS and GST here too.',
-        journals: 'Adjustments (depreciation, provisions, transfers) and cash ↔ bank movements.'
+        journals: 'Adjustments (depreciation, provisions, transfers), cash ↔ bank movements, and production entries that turn raw materials into finished goods.'
     }[kind], canEdit() ? `${kind === 'purchases' ? `<a class="btn btn-s adv" href="#/scan">${ic('cam')} Scan bill</a>` : ''}${newBtns}` : '')
         + `<div class="card"><div class="row" style="margin-bottom:12px">
             <select onchange="listFilter.month=this.value;route()">${opt('', `All of FY ${fyLabel(fy)}`, listFilter.month)}${months.map(m => opt(m, ymLabel(m), listFilter.month)).join('')}</select>
@@ -63,10 +63,11 @@ function viewVoucherForm(src) {
     if (!editing && pendingDraft && pendingDraft.v.type === F.type) { F = pendingDraft.v; F.attachmentFile = pendingDraft.file; pendingDraft = null; }
     F.date ||= todayISO() < fyStart(state.fy) || todayISO() > fyEnd(state.fy) ? fyEnd(state.fy) : todayISO();
     if (ITEM_TYPES.includes(F.type)) { F.lines = F.lines?.length ? F.lines : [blankLine()]; if (F.itc === undefined) F.itc = true; }
+    if (F.type === 'SJ') { F.consume = F.consume?.length ? F.consume : [{ itemId: '', qty: '' }]; F.produce = F.produce?.length ? F.produce : [{ itemId: '', qty: '' }]; }
     if (F.type === 'JV') F.jlines = F.jlines?.length ? F.jlines.map(l => ({ ...l })) : [{ acc: '', dr: 0, cr: 0 }, { acc: '', dr: 0, cr: 0 }];
     const T = VTYPES[F.type];
     const head = `<div class="page-head"><div><h1>${editing ? `Edit ${esc(F.no)}` : `New ${T.name}`}</h1><p>${editing ? 'Every change is recorded in the audit trail with the old and new values.' : `Number <b>${esc(previewNumber(F.type, F.date))}</b> is given when you save (numbers never skip). <span class="hide-m">Shortcut <kbd>${T.key}</kbd> · save with <kbd>Ctrl</kbd>+<kbd>S</kbd>.</span>`}</p></div></div>`;
-    $('#view').innerHTML = head + `<div class="vform"><div id="vErr"></div>${ITEM_TYPES.includes(F.type) ? itemFormHtml() : F.type === 'JV' ? journalFormHtml() : moneyFormHtml()}
+    $('#view').innerHTML = head + `<div class="vform"><div id="vErr"></div>${ITEM_TYPES.includes(F.type) ? itemFormHtml() : F.type === 'JV' ? journalFormHtml() : F.type === 'SJ' ? sjFormHtml() : moneyFormHtml()}
         <div id="vWarn"></div>
         <div class="form-foot"><a class="btn btn-s" href="${editing ? `#/v/${F.id}` : 'javascript:history.back()'}">Cancel</a>${editing ? '' : '<button class="btn btn-s" id="vSaveNew">Save & new</button>'}<button class="btn btn-p" id="vSave">Save <kbd style="background:transparent;color:#fff;border-color:rgba(255,255,255,.4)">Ctrl S</kbd></button></div></div>`;
     wireForm();
@@ -142,6 +143,7 @@ function wireForm() {
         onParty(true);
         drawLines();
     } else if (F.type === 'JV') drawJournal();
+    else if (F.type === 'SJ') drawSj();
     else {
         on('f_acc', 'onchange', e => { F.accountId = e.target.value; refresh(); });
         on('f_to', 'onchange', e => { F.toId = e.target.value; });
@@ -366,7 +368,7 @@ function viewVoucher(id) {
         ${v.ewb ? `<div class="warns" style="background:var(--info-soft);color:var(--info)"><b>e-Way bill${v.ewb.test ? ' (TEST)' : ''}:</b> ${esc(v.ewb.no)} · ${esc(v.ewb.vehicle)} · ${v.ewb.distance} km · valid till ${fmtDate(v.ewb.validUpto)}</div>` : ''}
         <div class="grid g3">
         <div class="card" style="grid-column:span 2">
-            ${ITEM_TYPES.includes(v.type) ? `<div class="tw"><table class="t"><thead><tr><th class="hide-m">#</th><th>Item / description</th><th class="hide-m">HSN</th><th class="n">Qty</th><th class="n hide-m">Rate</th><th class="n hide-m">Taxable</th><th class="n hide-m">GST</th><th class="n hide-m">Tax</th><th class="n">Amount</th></tr></thead><tbody>
+            ${v.type === 'SJ' ? sjViewHtml(v) : ITEM_TYPES.includes(v.type) ? `<div class="tw"><table class="t"><thead><tr><th class="hide-m">#</th><th>Item / description</th><th class="hide-m">HSN</th><th class="n">Qty</th><th class="n hide-m">Rate</th><th class="n hide-m">Taxable</th><th class="n hide-m">GST</th><th class="n hide-m">Tax</th><th class="n">Amount</th></tr></thead><tbody>
                 ${v.lines.map((l, i) => `<tr><td class="hide-m">${i + 1}</td><td style="white-space:normal">${esc(l.desc || itemById(l.itemId)?.name || '')}</td><td class="hide-m">${esc(l.hsn)}</td><td class="n">${l.qty} ${esc(l.unit)}</td><td class="n hide-m">${num(l.rate)}</td><td class="n hide-m">${num(l.taxable)}</td><td class="n hide-m">${l.effRate ?? l.gstRate}%</td><td class="n hide-m">${num(l.cgst + l.sgst + l.igst)}</td><td class="n">${num(l.amount)}</td></tr>`).join('')}
                 </tbody></table></div>
                 <div class="totals" style="margin-top:12px"><div><span>Taxable</span><b>${num(t.taxable)}</b></div>${t.cgst ? `<div><span>CGST</span><span>${num(t.cgst)}</span></div><div><span>SGST</span><span>${num(t.sgst)}</span></div>` : ''}${t.igst ? `<div><span>IGST</span><span>${num(t.igst)}</span></div>` : ''}${t.roundOff ? `<div><span>Round off</span><span>${num(t.roundOff)}</span></div>` : ''}<div class="big"><span>Total</span><span>${inr(t.total)}</span></div>${v.tcs?.amount ? `<div><span>TCS ${esc(tcsName(v.tcs.section, true))} @ ${v.tcs.rate}%</span><span>${num(v.tcs.amount)}</span></div><div class="big"><span>Receivable</span><span>${inr(t.receivable)}</span></div>` : ''}${v.tds?.amount ? `<div><span>TDS ${esc(tdsName(v.tds.section, true))} @ ${v.tds.rate}%</span><span>−${num(v.tds.amount)}</span></div>` : ''}</div>
@@ -488,41 +490,94 @@ function printVoucher(id) {
 
 // ---------- scan a bill ----------
 let scan = null;
+// Bills that read cleanly are posted straight away (Settings → Preferences can turn this off); anything unclear
+// is kept in a list to check. Several bills can be picked at once.
+let scanResults = [];
 function viewScan() {
     if (!canEdit()) { $('#view').innerHTML = errorsHtml('Your role is read-only.'); return; }
     scan = null;
-    $('#view').innerHTML = pageHead('Scan a bill', 'Upload a photo or PDF of a bill. The ERP reads it, decides whether it is a purchase (you are the buyer) or a sale (you are the seller) from the GSTINs, finds or creates the party, and fills the voucher. You check it and save; everything else (ledgers, GST, TDS, statements) follows automatically.')
+    const auto = co.settings.prefs?.autoPost !== false;
+    $('#view').innerHTML = pageHead('Scan bills', `Upload photos or PDFs of bills — several at once if you like. The ERP reads each one, works out from the GSTINs whether it is a purchase or a sale, finds or creates the party and ${auto ? '<b>posts it automatically when everything reads cleanly</b>' : 'fills the entry for you to check'}. Ledgers, GST, TDS, stock and the financial statements update straight away.`)
         + `<div class="grid g2"><div class="card">
-            <label class="drop" id="drop"><input type="file" id="scanFile" accept="image/*,application/pdf" capture="environment" hidden>${ic('cam')}<b>Drop a bill here, or tap to take a photo</b><span class="note">JPG, PNG or PDF · reading needs internet the first time</span></label>
+            <label class="drop" id="drop"><input type="file" id="scanFile" accept="image/*,application/pdf" multiple hidden>${ic('cam')}<b>Drop bills here, or tap to choose / take photos</b><span class="note">JPG, PNG or PDF · several at once · reading needs internet the first time</span></label>
+            <label class="chk" style="margin-top:12px"><input type="checkbox" ${auto ? 'checked' : ''} onchange="(co.settings.prefs ||= {}).autoPost=this.checked;saveCo();route()"> Post automatically when a bill reads cleanly (all details found, totals agree, GSTINs valid)</label>
             <div id="scanProg" hidden style="margin-top:14px"><div class="note" id="scanMsg">Reading…</div><div class="progress" style="margin-top:6px"><i id="scanBar"></i></div></div>
-            <details style="margin-top:14px"><summary class="note" style="cursor:pointer">No photo? Paste the bill text instead</summary><textarea id="scanText" rows="7" style="width:100%;margin-top:8px" placeholder="Paste the text of the bill"></textarea><button class="btn btn-s btn-sm" style="margin-top:8px" onclick="processText($('#scanText').value, null)">Read this text</button></details>
+            <details style="margin-top:14px"><summary class="note" style="cursor:pointer">No photo? Paste the bill text instead</summary><textarea id="scanText" rows="7" style="width:100%;margin-top:8px" placeholder="Paste the text of the bill"></textarea><button class="btn btn-s btn-sm" style="margin-top:8px" onclick="handleBillText($('#scanText').value, null, 'Pasted text')">Read this text</button></details>
             <div id="scanPrev" style="margin-top:14px"></div></div>
-        <div class="card"><h2>What the ERP found</h2><div id="scanOut"><p class="note">Upload a bill to begin.</p></div></div></div>`;
+        <div class="card"><h2>Results</h2><div id="scanList"></div><div id="scanOut"></div></div></div>`;
+    drawScanList();
     const drop = $('#drop'), input = $('#scanFile');
-    input.onchange = () => input.files[0] && processFile(input.files[0]);
+    input.onchange = () => processFiles([...input.files]);
     drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
     drop.ondragleave = () => drop.classList.remove('over');
-    drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); if (e.dataTransfer.files[0]) processFile(e.dataTransfer.files[0]); };
+    drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); processFiles([...e.dataTransfer.files]); };
 }
-async function processFile(file) {
-    if (limitReached('scans')) return upgradePrompt(`More than ${planLimits().scans} bill scans a month`);
-    if (file.size > 10 * 1024 * 1024) return toast('Please use a file under 10 MB.');
-    $('#scanProg').hidden = false;
-    $('#scanPrev').innerHTML = /^image\//.test(file.type) ? `<img class="scan-img" src="${URL.createObjectURL(file)}" alt="Bill">` : `<p class="note">📄 ${esc(file.name)}</p>`;
-    try {
-        const text = await readBillFile(file, (p, m) => { $('#scanBar').style.width = p + '%'; $('#scanMsg').textContent = `${m}… ${p}%`; });
-        $('#scanBar').style.width = '100%';
-        $('#scanMsg').textContent = 'Done';
-        processText(text, file);
-    } catch (err) {
-        $('#scanMsg').textContent = err.message;
-        $('#scanOut').innerHTML = errorsHtml(err) + '<p class="note">You can still paste the bill text, or enter it with F9.</p>';
+function drawScanList() {
+    const box = $('#scanList');
+    if (!box) return;
+    box.innerHTML = scanResults.length ? `<div class="tw" style="margin-bottom:12px"><table class="t"><tbody>${scanResults.map((r, i) => `<tr><td style="white-space:normal"><b>${esc(r.name)}</b><div class="note">${esc(r.summary || '')}</div></td><td style="white-space:normal">${r.status === 'posted' ? `<span class="badge good">Posted</span> <a href="#/v/${r.v.id}">${esc(r.v.no)}</a>` : r.status === 'review' ? `<span class="badge warn">Check</span> <span class="note">${esc(r.reason)}</span>` : r.status === 'reading' ? '<span class="badge info">Reading…</span>' : `<span class="badge bad">Not read</span> <span class="note">${esc(r.reason)}</span>`}</td><td>${r.status === 'review' ? `<button class="btn btn-p btn-sm" onclick="reviewScan(${i})">Check & save</button>` : ''}</td></tr>`).join('')}</tbody></table></div>` : '<p class="note">Upload bills to begin.</p>';
+}
+async function processFiles(list) {
+    for (const file of list) {
+        if (limitReached('scans')) { upgradePrompt(`More than ${planLimits().scans} bill scans a month`); break; }
+        if (file.size > 10 * 1024 * 1024) { scanResults.unshift({ name: file.name, status: 'error', reason: 'File is over 10 MB.' }); continue; }
+        const r = { name: file.name, status: 'reading' };
+        scanResults.unshift(r); drawScanList();
+        $('#scanProg').hidden = false;
+        $('#scanPrev').innerHTML = /^image\//.test(file.type) ? `<img class="scan-img" src="${URL.createObjectURL(file)}" alt="Bill">` : `<p class="note">📄 ${esc(file.name)}</p>`;
+        try {
+            const text = await readBillFile(file, (p, m) => { $('#scanBar').style.width = p + '%'; $('#scanMsg').textContent = `${file.name}: ${m}… ${p}%`; });
+            Object.assign(r, await autoPostBill(text, file));
+        } catch (err) { Object.assign(r, { status: 'error', reason: err.message }); }
+        drawScanList();
     }
+    $('#scanMsg').textContent = 'Done';
+    $('#scanBar').style.width = '100%';
 }
-function processText(text, file) {
-    if (file || text) { meta.scans ||= {}; meta.scans[ymOf(todayISO())] = scansThisMonth() + 1; saveMeta(); }
+async function handleBillText(text, file, name) {
+    const r = { name: name || 'Bill' };
+    Object.assign(r, await autoPostBill(text, file));
+    scanResults.unshift(r);
+    drawScanList();
+    if (r.status === 'review') reviewScan(0);
+}
+// Reads the bill text and either posts it or explains what needs checking
+async function autoPostBill(text, file) {
+    meta.scans ||= {}; meta.scans[ymOf(todayISO())] = scansThisMonth() + 1; saveMeta();
     const p = parseInvoiceText(text);
     const d = draftFromBill(p);
+    const base = { p, d, file, summary: [p.invoiceNo, p.date && fmtDate(p.date), p.total != null && inr(p.total)].filter(Boolean).join(' · ') };
+    const review = reason => ({ ...base, status: 'review', reason });
+    if (co.settings.prefs?.autoPost === false) return review('Automatic posting is off');
+    if (p.confidence < 5) return review(`Some details were not read (${[!p.gstins.length && 'GSTIN', !p.invoiceNo && 'invoice no.', !p.date && 'date', p.total == null && 'total', p.taxable == null && 'taxable value'].filter(Boolean).join(', ')})`);
+    if (p.checks.length) return review(p.checks[0]);
+    if (!d.partyGstin) return review(`The other party's GSTIN was not found${co.profile.gstin ? '' : ' (add your own GSTIN in Settings so the ERP can tell sales from purchases)'}`);
+    if (d.type === 'SI' && p.buyerGstin === co.profile.gstin) return review('Your GSTIN is the buyer here, but the bill reads like a sale');
+    if (!p.date || p.date > todayISO()) return review('The bill date is missing or in the future');
+    try {
+        let v;
+        inBulk(() => {
+            if (!d.v.partyId && d.newParty) d.v.partyId = saveContact({ ...d.newParty, creditDays: co.settings.prefs?.[d.type === 'PB' ? 'vendDays' : 'custDays'] ?? 30 }).id;
+            const party = contactById(d.v.partyId);
+            d.v.pos = d.type === 'PB' ? companyState() : party.state;
+            if (d.type === 'PB' && party.tdsSection) d.v.tds = { section: party.tdsSection };
+            if (party.lastAcc) d.v.lines[0].accId = party.lastAcc;
+            d.v.date = p.date;
+            const check = computeVoucher(JSON.parse(JSON.stringify(d.v)));
+            if (Math.abs(check.totals.total - p.total) > 2) throw Object.assign(new Error(`Worked-out total ${inr(check.totals.total)} differs from the bill's ${inr(p.total)}`), { review: true });
+            v = d.type === 'SI' ? saveVoucher({ ...d.v, no: p.invoiceNo }, { keepNo: true, source: 'Scanned bill (posted automatically)' }) : saveVoucher(d.v, { source: 'Scanned bill (posted automatically)' });
+        });
+        if (file) { await files.put(`att:${v.id}`, file); v.attachment = { name: file.name, type: file.type, size: file.size }; saveCo(); }
+        return { ...base, status: 'posted', v, summary: `${contactById(v.partyId)?.name} · ${base.summary}` };
+    } catch (e) { return review(e.message.split('\n')[0]); }
+}
+function reviewScan(i) {
+    const r = scanResults[i];
+    if (!r?.p) return;
+    showScanReview(r.p, r.d, r.file);
+}
+function processText(text, file) { return handleBillText(text, file, file?.name || 'Bill'); }
+function showScanReview(p, d, file) {
     scan = { p, d, file };
     const party = contactById(d.v.partyId);
     const row = (k, v, ok = true) => `<dt>${k}</dt><dd>${v ? esc(v) : '<span class="badge warn">not found</span>'}${!ok ? ' <span class="badge warn">check</span>' : ''}</dd>`;
@@ -565,4 +620,24 @@ async function upiQrInto(sel, link, amount) {
         const box = $(sel);
         if (box && src) box.innerHTML = `<img src="${src}" alt="UPI QR" style="width:96px;height:96px"><div style="font-size:9px">Scan to pay ${inr(amount)} by UPI</div>`;
     } catch (e) { /* offline: invoice prints without the QR */ }
+}
+
+// ---------- production (stock journal) ----------
+function sjFormHtml() {
+    return `<div class="card"><div class="fg"><label class="f">Date *<input id="f_date" type="date" value="${F.date}"></label><label class="f wide">Narration<input id="f_narr" value="${esc(F.narration)}" placeholder="e.g. Production for the week, batch numbers"></label></div>
+        <p class="note" style="margin-top:8px">Materials consumed leave stock at their average cost; that cost becomes the cost of the goods produced. No ledger entry is made: the value moves within inventory, and the Profit and Loss shows it as cost of materials consumed and change in finished goods.</p></div>
+        <div class="grid g2"><div class="card"><h2>Materials consumed</h2><table class="lines"><tbody id="sj_c"></tbody></table><button class="btn btn-s btn-sm" type="button" onclick="F.consume.push({itemId:'',qty:''});drawSj()">+ Add material</button></div>
+        <div class="card"><h2>Goods produced</h2><table class="lines"><tbody id="sj_p"></tbody></table><button class="btn btn-s btn-sm" type="button" onclick="F.produce.push({itemId:'',qty:''});drawSj()">+ Add product</button></div></div>`;
+}
+function drawSj() {
+    const st = stockAt(F.date || todayISO()).items;
+    const items = kinds => co.items.filter(i => i.type === 'goods' && i.trackStock !== false && kinds.includes(i.kind || 'trading'));
+    const row = (side, l, i, kinds) => `<tr data-i="${i}"><td class="wide" data-l="Item"><select data-s="${side}" data-k="itemId">${opt('', 'Choose…', l.itemId)}${items(kinds).map(it => opt(it.id, `${it.name}${st[it.id] ? ` · ${r2(st[it.id].qty)} ${it.unit} in stock` : ''}`, l.itemId)).join('')}</select></td><td class="half" data-l="Quantity"><input data-s="${side}" data-k="qty" class="num" type="number" min="0" step="0.001" inputmode="decimal" value="${l.qty}"></td><td class="del"><button class="btn btn-g btn-sm" type="button" onclick="F['${side}'].splice(${i},1);drawSj()">×</button></td></tr>`;
+    $('#sj_c').innerHTML = F.consume.map((l, i) => row('consume', l, i, ['raw', 'trading'])).join('');
+    $('#sj_p').innerHTML = F.produce.map((l, i) => row('produce', l, i, ['finished', 'trading'])).join('');
+    $$('#sj_c [data-k], #sj_p [data-k]').forEach(el => { el[el.tagName === 'SELECT' ? 'onchange' : 'oninput'] = () => { const L = F[el.dataset.s][Number(el.closest('tr').dataset.i)]; L[el.dataset.k] = el.dataset.k === 'qty' ? Number(el.value) || 0 : el.value; }; });
+}
+function sjViewHtml(v) {
+    const t = list => `<div class="tw"><table class="t"><thead><tr><th>Item</th><th class="n">Quantity</th></tr></thead><tbody>${(list || []).map(l => { const it = itemById(l.itemId); return `<tr><td>${esc(it?.name || '')}</td><td class="n">${r2(l.qty)} ${esc(it?.unit || '')}</td></tr>`; }).join('')}</tbody></table></div>`;
+    return `<div class="grid g2"><div><h2>Materials consumed</h2>${t(v.consume)}</div><div><h2>Goods produced</h2>${t(v.produce)}</div></div>${v.narration ? `<p class="note" style="margin-top:8px">${esc(v.narration)}</p>` : ''}`;
 }

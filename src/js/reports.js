@@ -73,8 +73,13 @@ function rptPL() {
         { label: 'II. Other income', cur: t(pl, 'other'), prev: t(pp, 'other'), details: mergeDetails(pl.other, pp?.other) },
         { label: 'III. Total income (I + II)', cur: pl.totalIncome, prev: pp?.totalIncome, cls: 'sub' },
         { head: 'IV. Expenses' },
-        { label: 'Purchases of stock-in-trade', ind: 'ind', cur: t(pl, 'purchases'), prev: t(pp, 'purchases'), details: mergeDetails(pl.purchases, pp?.purchases) },
-        { label: 'Changes in inventories of stock-in-trade', ind: 'ind', note: `Opening ${num(pl.openStock)} − closing ${num(pl.closeStock)}`, cur: pl.changeInv, prev: pp?.changeInv },
+        ...(pl.mfg ? [
+            { label: 'Cost of materials consumed', ind: 'ind', note: `Opening ${num(pl.rawOpen)} + purchases ${num(t(pl, 'purchases'))} − closing ${num(pl.rawClose)}`, cur: pl.materials, prev: pp?.materials, details: mergeDetails(pl.purchases, pp?.purchases) },
+            { label: 'Changes in inventories of finished goods and stock-in-trade', ind: 'ind', cur: pl.changeFg, prev: pp?.changeFg }
+        ] : [
+            { label: 'Purchases of stock-in-trade', ind: 'ind', cur: t(pl, 'purchases'), prev: t(pp, 'purchases'), details: mergeDetails(pl.purchases, pp?.purchases) },
+            { label: 'Changes in inventories of stock-in-trade', ind: 'ind', note: `Opening ${num(pl.openStock)} − closing ${num(pl.closeStock)}`, cur: pl.changeInv, prev: pp?.changeInv }
+        ]),
         { label: 'Employee benefits expense', ind: 'ind', cur: t(pl, 'employee'), prev: t(pp, 'employee'), details: mergeDetails(pl.employee, pp?.employee) },
         { label: 'Finance costs', ind: 'ind', cur: t(pl, 'finance'), prev: t(pp, 'finance'), details: mergeDetails(pl.finance, pp?.finance) },
         { label: 'Depreciation and amortisation expense', ind: 'ind', cur: t(pl, 'dep'), prev: t(pp, 'dep'), details: mergeDetails(pl.dep, pp?.dep) },
@@ -115,7 +120,7 @@ function rptBS() {
         line('(a) Property, plant and equipment', 'nca_ppe'),
         line('(b) Non-current investments', 'nca_invest'),
         { label: '(2) Current assets', cur: b.ca, prev: p?.ca, cls: 'sub' },
-        line('(a) Inventories', 'ca_inventory', 'At weighted average cost'),
+        line('(a) Inventories', 'ca_inventory', isManufacturer() ? 'Raw materials and finished goods, at cost (AS 2)' : 'At weighted average cost'),
         line('(b) Trade receivables', 'ca_receivables'),
         line('(c) Cash and cash equivalents', 'ca_cash'),
         line('(d) Short-term loans and advances', 'ca_loans', 'Incl. TDS receivable'),
@@ -263,17 +268,26 @@ function viewGst(tab) {
     if (!months.includes(gstMonth)) gstMonth = months.at(-1) || ymOf(todayISO());
     const ym = gstMonth;
     const filed = t => co.filings.find(f => f.type === t && (f.period === ym || f.period === `${quarterOf(ym)}-${fyOf(ym + '-01')}`));
-    const tabs = [['r1', 'GSTR-1'], ['r3b', 'GSTR-3B'], ['2b', 'GSTR-2B / IMS'], ['ein', 'e-Invoice & e-Way bill'], ['health', 'Pre-filing check']];
+    const tabs = [['plan', 'This month: what to do'], ['r1', 'GSTR-1'], ['2b', 'GSTR-2B / IMS'], ['r3b', 'GSTR-3B'], ['gstr9', 'GSTR-9 annual'], ['ein', 'e-Invoice & e-Way bill'], ['health', 'Pre-filing check']];
     const head = pageHead('GST', `Returns are built from your invoices and bills. ${co.profile.gstin ? `GSTIN ${esc(co.profile.gstin)}` : '<b>Add your GSTIN in Settings.</b>'}`, `<select onchange="gstMonth=this.value;route()">${months.map(m => opt(m, ymLabel(m), ym)).join('')}</select>`)
-        + `<div class="tabs">${tabs.map(([k, l]) => `<a href="#/gst/${k}" class="${tab === k ? 'on' : ''} ${k === '2b' ? 'adv' : ''}">${l}</a>`).join('')}</div>`;
+        + `<div class="tabs">${tabs.map(([k, l]) => `<a href="#/gst/${k}" class="${tab === k ? 'on' : ''}">${l}</a>`).join('')}</div>`;
     let body = '';
     const sumRow = (label, o) => `<tr><td>${label}</td>${amtCell(o.txval ?? '')}${amtCell(o.iamt)}${amtCell(o.camt)}${amtCell(o.samt)}</tr>`;
-    if (tab === 'r1') {
+    const steps = (list) => `<ol class="steps">${list.map(x => `<li>${x}</li>`).join('')}</ol>`;
+    if (tab === 'plan') {
+        const A = gstAdvice(ym);
+        const lv = { bad: 'bad', warn: 'warn', info: '', good: '' };
+        body = `<div class="card"><h2>GST for ${ymLabel(ym)} — step by step</h2>${A.map(a => `<a class="alert ${lv[a.level]}" href="${a.route}" style="text-decoration:none;color:inherit;align-items:flex-start"><span class="dot" ${a.level === 'good' ? 'style="background:var(--good)"' : ''}></span><span class="t"><b>${esc(a.text)}</b><small style="white-space:normal">${esc(a.how)}</small></span></a>`).join('') || '<p class="note">Nothing to do for this month.</p>'}</div>
+            <div class="card"><h2>The monthly routine</h2>${steps(['Sales and purchase bills are posted as they happen (scan them or key them in).', '<b>11th</b> — GSTR-1: open the GSTR-1 tab, download the JSON, upload it on the portal and file. Enter the ARN here.', '<b>14th</b> — GSTR-2B is ready on the portal: download the JSON and import it on the GSTR-2B tab. Accept or reject in IMS as suggested.', '<b>20th</b> — GSTR-3B: the GSTR-3B tab shows every box. Check it against the portal\'s auto-filled return, pay the cash part (PMT-06 challan), file, then press "Post set-off journal" and record the payment here.'])}</div>`;
+    } else if (tab === 'gstr9') {
+        body = gstr9Html(state.fy);
+    } else if (tab === 'r1') {
         const g = gstr1(ym);
         const sec = (title, rows) => rows.length ? `<h2 style="margin-top:14px">${title} <span class="badge">${rows.length}</span></h2><div class="tw"><table class="t"><thead><tr><th>No.</th><th>Date</th><th>Party</th><th>GSTIN</th><th>POS</th><th class="n">Value</th><th class="n">Taxable</th><th class="n">Tax</th></tr></thead><tbody>${rows.map(r => `<tr class="click" onclick="go('#/v/${r.v.id}')"><td>${esc(r.v.no)}</td><td>${fmtDate(r.v.date)}</td><td>${esc(r.party?.name)}</td><td>${esc(r.party?.gstin || '')}</td><td>${esc(r.v.pos)}</td><td class="n">${num(r.val)}</td><td class="n">${num(r.v.totals.taxable)}</td><td class="n">${num(r.v.totals.tax)}</td></tr>`).join('')}</tbody></table></div>` : '';
         body = `<div class="card"><div class="row" style="justify-content:space-between"><div>${filed('GSTR-1') ? `<span class="badge good">Filed ${fmtDate(filed('GSTR-1').filedOn)} · ${esc(filed('GSTR-1').ref)}</span> Invoices of this month are locked.` : `<span class="badge warn">Not filed</span> Due ${fmtDate(`${addMonths(ym, 1)}-11`)}`}</div>
             <div class="row"><button class="btn btn-s btn-sm" onclick="if (gate('gstFiling')) download('GSTR1_${co.profile.gstin}_${ym.slice(5)}${ym.slice(0, 4)}.json', JSON.stringify(gstr1Json('${ym}'), null, 1), 'application/json')">${ic('dl')} JSON for GST portal</button>${!filed('GSTR-1') && canEdit() ? `<button class="btn btn-p btn-sm" onclick="fileReturn('GSTR-1','${ym}')">Mark as filed</button>` : ''}</div></div>
-            <p class="note" style="margin-top:8px">${g.summary.invoices} invoice(s), ${g.summary.notes} credit note(s), taxable value ${inr(g.summary.taxable)}. Upload the JSON in the GST offline tool or portal and verify before filing.</p>
+            <p class="note" style="margin-top:8px">${g.summary.invoices} invoice(s), ${g.summary.notes} credit note(s), taxable value ${inr(g.summary.taxable)}.</p>
+            ${filed('GSTR-1') ? '' : steps(['Press <b>JSON for GST portal</b> above.', 'On <a href="https://services.gst.gov.in/services/login" target="_blank" rel="noopener">gst.gov.in</a>: Returns Dashboard → choose the period → GSTR-1 → <b>Prepare offline</b> → Upload → choose the file. Wait for "Processed".', 'Open <b>Prepare online</b> to see the summary; it should match the tables below.', 'File with DSC or EVC, copy the ARN, and press <b>Mark as filed</b> here.'])}
             ${sec('4A · B2B and SEZ invoices', g.b2b)}${sec('5 · B2C large (inter-state above ₹1 lakh)', g.b2cl)}${sec('6A · Exports', g.exp)}${sec('9B · Credit notes to registered parties', g.cdnr)}${sec('9B · Credit notes to unregistered', g.cdnur)}
             ${g.b2cs.length ? `<h2 style="margin-top:14px">7 · B2C others (summary)</h2><div class="tw"><table class="t"><thead><tr><th>POS</th><th>Type</th><th class="n">Rate</th><th class="n">Taxable</th><th class="n">IGST</th><th class="n">CGST</th><th class="n">SGST</th></tr></thead><tbody>${g.b2cs.map(b => `<tr><td>${esc(stateName(b.pos))}</td><td>${b.sply}</td><td class="n">${b.rt}%</td>${amtCell(b.txval)}${amtCell(b.iamt)}${amtCell(b.camt)}${amtCell(b.samt)}</tr>`).join('')}</tbody></table></div>` : ''}
             ${[['12 · HSN summary – B2B', g.hsnB2B], ['12 · HSN summary – B2C', g.hsnB2C]].map(([t, l]) => l.length ? `<h2 style="margin-top:14px">${t}</h2><div class="tw"><table class="t"><thead><tr><th>HSN</th><th>UQC</th><th class="n">Rate</th><th class="n">Qty</th><th class="n">Taxable</th><th class="n">IGST</th><th class="n">CGST</th><th class="n">SGST</th></tr></thead><tbody>${l.map(h => `<tr><td>${esc(h.hsn)}</td><td>${esc(h.uqc)}</td><td class="n">${h.rt}%</td><td class="n">${r2(h.qty)}</td>${amtCell(h.txval)}${amtCell(h.iamt)}${amtCell(h.camt)}${amtCell(h.samt)}</tr>`).join('')}</tbody></table></div>` : '').join('')}
@@ -283,19 +297,22 @@ function viewGst(tab) {
         const s = g.setoff;
         body = `<div class="card"><div class="row" style="justify-content:space-between"><div>${filed('GSTR-3B') ? `<span class="badge good">Filed ${fmtDate(filed('GSTR-3B').filedOn)} · ${esc(filed('GSTR-3B').ref)}</span>` : `<span class="badge warn">Not filed</span> Due ${fmtDate(`${addMonths(ym, 1)}-20`)}`}</div>
             <div class="row">${canEdit() ? `<button class="btn btn-s btn-sm" onclick="doSetOff('${ym}')">Post set-off journal</button><button class="btn btn-s btn-sm" onclick="payGst('${ym}')">Pay GST (cash ledger)</button>` : ''}${!filed('GSTR-3B') && canEdit() ? `<button class="btn btn-p btn-sm" onclick="fileReturn('GSTR-3B','${ym}')">Mark as filed</button>` : ''}</div></div>
-            <p class="note" style="margin:8px 0">Outward tax liability in GSTR-3B is now auto-filled from GSTR-1 and locked, so GSTR-1 must be right first (correct mistakes through GSTR-1A).</p>
+            <div class="${g.basis === '2B' ? 'note' : 'warns'}" style="margin:8px 0">${g.basis === '2B' ? `✓ Input credit is taken from GSTR-2B.${g.deferred.iamt + g.deferred.camt + g.deferred.samt ? ` ${inr(g.deferred.iamt + g.deferred.camt + g.deferred.samt)} of this month's bills is not in 2B yet and is carried forward until it appears.` : ''}` : 'GSTR-2B is not imported for this month, so input credit is shown as per your books. Import 2B to claim only what is legally available.'}</div>
+            <div class="row" style="margin:6px 0 10px"><button class="btn btn-s btn-sm" onclick="download('GSTR3B_${co.profile.gstin}_${ym.slice(5)}${ym.slice(0, 4)}.json', JSON.stringify(gstr3bJson('${ym}'), null, 1), 'application/json')">${ic('dl')} GSTR-3B data (JSON)</button><button class="btn btn-s btn-sm" onclick="printReport('g3T','GSTR-3B ${ymLabel(ym)}')">${ic('print')} Print worksheet</button></div>
+            ${filed('GSTR-3B') ? '' : steps(['On the portal, open GSTR-3B for the period. Outward tax (3.1) is filled from your GSTR-1 and locked; credit (4) is filled from GSTR-2B.', 'Compare each box with this screen. Change table 4 if needed (for example credit held back here because it is not in 2B).', `Create the challan for the cash part (${inr(s.totalCash)}), pay it, then <b>Offset liability</b> and file with DSC / EVC.`, 'Here: press <b>Post set-off journal</b>, record the cash payment with <b>Pay GST</b>, and <b>Mark as filed</b> with the ARN.'])}
+            <p class="note" style="margin:8px 0">The GST portal does not accept a GSTR-3B file upload from taxpayers — it fills the return for you. The JSON is for GST Suvidha Providers and tax-professional software.</p><div id="g3T">
             <h2>3.1 Outward and inward supplies liable to reverse charge</h2><div class="tw"><table class="t"><thead><tr><th>Nature</th><th class="n">Taxable</th><th class="n">IGST</th><th class="n">CGST</th><th class="n">SGST</th></tr></thead><tbody>
             ${sumRow('(a) Outward taxable supplies', g.a)}${sumRow('(b) Zero-rated (export / SEZ)', g.b)}${sumRow('(c) Nil-rated / exempt', g.c)}${sumRow('(d) Inward supplies under reverse charge', g.d)}</tbody></table></div>
             ${g.interUnreg.length ? `<h2 style="margin-top:14px">3.2 Inter-state supplies to unregistered persons</h2><div class="tw"><table class="t"><thead><tr><th>Place of supply</th><th class="n">Taxable</th><th class="n">IGST</th></tr></thead><tbody>${g.interUnreg.map(x => `<tr><td>${esc(stateName(x.pos))}</td>${amtCell(x.txval)}${amtCell(x.iamt)}</tr>`).join('')}</tbody></table></div>` : ''}
             <h2 style="margin-top:14px">4. Eligible ITC</h2><div class="tw"><table class="t"><thead><tr><th>Details</th><th class="n"></th><th class="n">IGST</th><th class="n">CGST</th><th class="n">SGST</th></tr></thead><tbody>
-            ${sumRow('A(3) Inward supplies under reverse charge', { ...g.itcRcm, txval: '' })}${sumRow('A(5) All other ITC', { ...g.itcOther, txval: '' })}${sumRow('B(2) Reversed (debit notes / returns)', { ...g.reversal, txval: '' })}${sumRow('Credit brought forward from earlier months', { ...g.carryIn, txval: '' })}${sumRow('C. Net ITC available', { ...g.itcNet, txval: '' })}${sumRow('D. Ineligible ITC (section 17(5))', { ...g.ineligible, txval: '' })}</tbody></table></div>
+            ${sumRow('A(3) Inward supplies under reverse charge', { ...g.itcRcm, txval: '' })}${sumRow(`A(5) All other ITC${g.basis === '2B' ? ' (as per GSTR-2B)' : ''}`, { ...g.itcOther, txval: '' })}${sumRow('B(2) Reversed (debit notes / returns)', { ...g.reversal, txval: '' })}${sumRow('Credit brought forward from earlier months', { ...g.carryIn, txval: '' })}${sumRow('C. Net ITC available', { ...g.itcNet, txval: '' })}${sumRow('D. Ineligible ITC (section 17(5))', { ...g.ineligible, txval: '' })}</tbody></table></div>
             <h2 style="margin-top:14px">6.1 Payment of tax</h2><div class="tw"><table class="t"><thead><tr><th></th><th class="n">IGST</th><th class="n">CGST</th><th class="n">SGST</th></tr></thead><tbody>
             <tr><td>Tax payable (other than reverse charge)</td>${amtCell(g.liab.iamt)}${amtCell(g.liab.camt)}${amtCell(g.liab.samt)}</tr>
             <tr><td>Paid through ITC</td>${amtCell(s.use.iamt.iamt + s.use.camt.iamt + s.use.samt.iamt)}${amtCell(s.use.iamt.camt + s.use.camt.camt)}${amtCell(s.use.iamt.samt + s.use.samt.samt)}</tr>
             <tr><td>Reverse charge (cash only)</td>${amtCell(g.rcmLiab.iamt)}${amtCell(g.rcmLiab.camt)}${amtCell(g.rcmLiab.samt)}</tr>
             <tr class="grand"><td>Pay in cash</td>${amtCell(s.cash.iamt)}${amtCell(s.cash.camt)}${amtCell(s.cash.samt)}</tr>
             <tr><td>ITC carried forward</td>${amtCell(s.carry.iamt)}${amtCell(s.carry.camt)}${amtCell(s.carry.samt)}</tr></tbody></table></div>
-            <p class="note" style="margin-top:8px">Set-off follows Rule 88A: IGST credit first, then CGST and SGST credit; CGST credit is never used for SGST or the other way round. Credit not used in earlier months is brought forward from the input GST ledgers, so post the set-off journal every month.</p></div>`;
+            </div><p class="note" style="margin-top:8px">Set-off follows Rule 88A: IGST credit first, then CGST and SGST credit; CGST credit is never used for SGST or the other way round. Credit not used in earlier months is brought forward from the input GST ledgers, so post the set-off journal every month.</p></div>`;
     } else if (tab === '2b' && !hasFeature('recon2b')) {
         body = `<div class="empty"><div style="font-size:28px">🔒</div><b style="display:block;margin:6px 0">GSTR-2B / IMS matching is in the Professional plan</b><p class="note" style="margin-bottom:12px">You are on ${esc(planStatus())}.</p><a class="btn btn-p" href="#/billing">See plans</a></div>`;
     } else if (tab === '2b') {
@@ -303,10 +320,11 @@ function viewGst(tab) {
         const cnt = s => rec.filter(x => x.status === s).length;
         body = `<div class="card"><h2>Import GSTR-2B for ${ymLabel(ym)}</h2><div class="row"><input type="file" id="b2file" accept=".json,.csv"><button class="btn btn-p btn-sm" onclick="do2b()">Import & match</button><button class="btn btn-g btn-sm" onclick="download('gstr2b-sample.csv', sample2bCsv('${ym}'), 'text/csv')">Sample CSV</button></div>
             <p class="note" style="margin-top:6px">Download the 2B JSON from the GST portal (Returns → GSTR-2B), or a CSV with GSTIN, invoice no., date, taxable, IGST, CGST, SGST.</p></div>
-            <div class="card"><div class="row" style="margin-bottom:10px"><span class="badge good">${cnt('Matched')} matched</span><span class="badge warn">${cnt('Mismatch')} mismatch</span><span class="badge bad">${cnt('Only in books')} only in books</span><span class="badge info">${cnt('Only in 2B')} only in 2B</span></div>
-            <div class="tw"><table class="t" id="b2T"><thead><tr><th>Status</th><th>Supplier</th><th>Invoice</th><th class="n">Tax in books</th><th class="n">Tax in 2B</th><th>Note</th><th>IMS action</th></tr></thead><tbody>
-            ${rec.map(x => `<tr><td><span class="badge ${{ Matched: 'good', Mismatch: 'warn', 'Only in books': 'bad', 'Only in 2B': 'info' }[x.status]}">${x.status}</span></td><td>${esc(x.v ? contactById(x.v.partyId)?.name : x.r.name || x.r.gstin)}</td><td>${x.v ? `<a href="#/v/${x.v.id}">${esc(x.v.refNo)}</a>` : esc(x.r.inv)}</td><td class="n">${x.bookTax != null ? num(x.bookTax) : '—'}</td><td class="n">${x.portalTax != null ? num(x.portalTax) : '—'}</td><td class="note">${esc(x.note)}</td>
-                <td>${x.r ? `<select onchange="setIms('${x.r.id}',this.value)" ${canEdit() ? '' : 'disabled'}>${['Pending', 'Accepted', 'Rejected'].map(s => opt(s, s, x.r.ims)).join('')}</select>` : '—'}</td></tr>`).join('') || '<tr><td colspan="7" class="muted" style="text-align:center;padding:20px">No bills or 2B data for this month.</td></tr>'}
+            <div class="card"><div class="row" style="margin-bottom:10px"><span class="badge good">${cnt('Matched')} matched</span><span class="badge warn">${cnt('Mismatch')} mismatch</span><span class="badge bad">${cnt('Only in books')} only in books</span><span class="badge info">${cnt('Only in 2B')} only in 2B</span>${cnt('Earlier bill, now in 2B') ? `<span class="badge good">${cnt('Earlier bill, now in 2B')} earlier bills now claimable</span>` : ''}</div>
+            ${rec.length ? `<div class="kpi" style="margin-bottom:12px;--c:var(--good)"><div class="v">${inr0(sum(rec.filter(x => x.claim), x => x.claim.iamt + x.claim.camt + x.claim.samt))}</div><div class="l">Input credit you can claim in GSTR-3B for ${ymLabel(ym)}</div><div class="s">Held back: ${inr0(sum(rec.filter(x => x.v && !x.claim), x => x.bookTax))} (not yet in 2B or rejected)</div></div>` : ''}
+            <div class="tw"><table class="t" id="b2T"><thead><tr><th>Status</th><th>Supplier</th><th>Invoice</th><th class="n">Tax in books</th><th class="n">Tax in 2B</th><th class="n">Claim now</th><th>What to do</th><th>IMS action</th></tr></thead><tbody>
+            ${rec.map(x => `<tr><td><span class="badge ${{ Matched: 'good', Mismatch: 'warn', 'Only in books': 'bad', 'Only in 2B': 'info', 'Earlier bill, now in 2B': 'good' }[x.status]}">${x.status}</span></td><td>${esc(x.v ? contactById(x.v.partyId)?.name : x.r.name || x.r.gstin)}</td><td>${x.v ? `<a href="#/v/${x.v.id}">${esc(x.v.refNo)}</a>` : esc(x.r.inv)}</td><td class="n">${x.bookTax != null ? num(x.bookTax) : '—'}</td><td class="n">${x.portalTax != null ? num(x.portalTax) : '—'}</td><td class="n">${x.claim ? num(x.claim.iamt + x.claim.camt + x.claim.samt) : '—'}</td><td class="note" style="white-space:normal;min-width:220px">${x.note ? esc(x.note) + '<br>' : ''}<b>${esc(x.action || '')}</b>${x.status === 'Only in 2B' && canEdit() ? `<br><button class="link" onclick="billFrom2b('${x.r.id}')">Enter this bill</button>` : ''}${x.status === 'Only in books' && contactById(x.v.partyId)?.phone ? `<br><a class="link" target="_blank" rel="noopener" href="https://wa.me/91${contactById(x.v.partyId).phone}?text=${encodeURIComponent(`Dear ${contactById(x.v.partyId).name}, your invoice ${x.v.refNo} dated ${fmtDate(x.v.refDate || x.v.date)} for ${inr(x.v.totals.total)} is not in our GSTR-2B. Kindly report it in your GSTR-1 / IFF. – ${co.profile.name}`)}">Remind on WhatsApp</a>` : ''}</td>
+                <td>${x.r ? `<select onchange="setIms('${x.r.id}',this.value)" ${canEdit() ? '' : 'disabled'}>${['Pending', 'Accepted', 'Rejected'].map(s => opt(s, s, x.r.ims)).join('')}</select>` : '—'}</td></tr>`).join('') || '<tr><td colspan="8" class="muted" style="text-align:center;padding:20px">No bills or 2B data for this month.</td></tr>'}
             </tbody></table></div><p class="note" style="margin-top:8px">ITC can be claimed only for invoices that appear in GSTR-2B (section 16(2)(aa)). In IMS, accept what is correct, reject what is not yours or wrong, and keep pending what you will decide later.</p></div>`;
     } else if (tab === 'ein') {
         const list = co.vouchers.filter(v => ['SI', 'CN'].includes(v.type) && ymOf(v.date) === ym && v.status !== 'cancelled');
@@ -412,9 +430,26 @@ function viewTds() {
     $('#view').innerHTML = head + body;
 }
 function payTax(kind, ym, amt) {
-    F = null;
-    viewVoucherForm({ type: 'PY', ledgerId: sysId(TAX_KIND[kind].ledger), taxMonth: ym, amount: Math.round(amt), accountId: cashBankAccounts().find(a => a.group === 'bank')?.id || sysId('cash'), narration: `${TAX_KIND[kind].label} deposited for ${ymLabel(ym)} (challan ITNS 281, tax year ${fyLabel(fyOf(ym + '-01'))})` });
-    history.replaceState(null, '', '#/new/PY');
+    const K = TAX_KIND[kind], R = taxRegister(kind, fyOf(ym + '-01'));
+    const m = R.months.find(x => x.ym === ym);
+    const byCode = {};
+    R.rows.filter(r => r.month === ym).forEach(r => { const k = `${r.code} · ${K.codes[r.section]?.old} · ${K.codes[r.section]?.label}`; byCode[k] = (byCode[k] || 0) + r.amount; });
+    const interest = m?.interest || 0;
+    modal({
+        title: `Pay ${K.label} for ${ymLabel(ym)}`,
+        body: `<div class="kpi" style="--c:var(--brand);margin-bottom:12px"><div class="v">${inr(Math.round(amt))}</div><div class="l">To pay now${interest ? ` (includes interest ${inr(interest)})` : ''}</div><div class="s">Due ${fmtDate(m?.due || depositDue(ym))}</div></div>
+            <dl class="found"><dt>TAN</dt><dd>${esc(co.profile.tan || 'Add your TAN in Settings → GST & TDS')}</dd><dt>Tax year</dt><dd>${fyLabel(fyOf(ym + '-01'))}</dd><dt>Type of payment</dt><dd>${kind === 'tds' ? 'TDS' : 'TCS'} payable by taxpayer (minor head 200)</dd></dl>
+            <div class="tw" style="margin:10px 0"><table class="t"><thead><tr><th>Payment code</th><th class="n">Amount</th></tr></thead><tbody>${Object.entries(byCode).map(([k, v]) => `<tr><td style="white-space:normal">${esc(k)}</td>${amtCell(v)}</tr>`).join('')}${interest ? `<tr><td>Interest (late deposit)</td>${amtCell(interest)}</tr>` : ''}</tbody></table></div>
+            <ol class="steps"><li>Press <b>Open e-Pay Tax</b>. Enter the TAN and the OTP sent to the registered mobile.</li><li>Choose "${kind === 'tds' ? 'TDS / TCS payable by taxpayer (200)' : 'TDS / TCS payable by taxpayer (200)'}", tax year ${fyLabel(fyOf(ym + '-01'))}, and the payment codes above with their amounts.</li><li>Pay by net banking, UPI or card. Download the challan receipt.</li><li>Come back and press <b>Record the challan</b>: enter the BSR code and challan serial number from the receipt.</li></ol>
+            <p class="note">TRACES is not used for paying. After the quarterly return is filed, TRACES is where you download Form ${K.cert.split(' ')[0]} certificates.</p>`,
+        foot: `<a class="btn btn-s" href="https://eportal.incometax.gov.in/iec/foservices/#/e-pay-tax-prelogin/user-details" target="_blank" rel="noopener">Open e-Pay Tax ↗</a><button class="btn btn-p" id="ptRec">Record the challan</button>`,
+        onOpen: () => $('#ptRec').onclick = () => {
+            closeModal();
+            F = null;
+            viewVoucherForm({ type: 'PY', ledgerId: sysId(K.ledger), taxMonth: ym, amount: Math.round(amt), accountId: cashBankAccounts().find(a => a.group === 'bank')?.id || sysId('cash'), narration: `${K.label} deposited for ${ymLabel(ym)} (challan, tax year ${fyLabel(fyOf(ym + '-01'))})` });
+            history.replaceState(null, '', '#/new/PY');
+        }
+    });
 }
 const payTds = (ym, amt) => payTax('tds', ym, amt);
 
@@ -751,7 +786,9 @@ async function importAll() {
     if (data.app !== 'we-create-erp') return alert('This is not a We Create ERP backup.');
     if (!await ask({ title: 'Restore backup', message: `Replace everything in this browser with the backup from ${new Date(data.at).toLocaleString('en-IN')}? You will need to sign in again.`, ok: 'Restore', danger: true })) return;
     Object.keys(localStorage).filter(k => k.startsWith('wcerp.')).forEach(k => localStorage.removeItem(k));
-    Object.entries(data.companies).forEach(([id, c]) => c && safeSet(coKey(id), JSON.stringify(c)));
+    store.ids().forEach(id => store.del(id));
+    Object.entries(data.companies).forEach(([id, c]) => c && store.put(id, JSON.stringify(c)));
+    await store.flush();
     meta = data.meta;
     auditPush(meta.audit, 'Backup restored', { entity: 'System', ref: data.at });
     saveMeta();
@@ -764,7 +801,46 @@ async function removeCompany() {
     if (name === null) return;
     if (name !== co.profile.name) return alert('The name did not match. Nothing was removed.');
     auditMeta('Company removed from this browser', { entity: 'Company', ref: co.profile.name });
-    localStorage.removeItem(coKey(co.id));
+    store.del(co.id);
     meta.companies = meta.companies.filter(c => c.id !== co.id);
     saveMeta(); co = null; go('#/companies');
+}
+
+function billFrom2b(id) {
+    const r = co.gstr2b.find(x => x.id === id);
+    if (!r) return;
+    let ct = co.contacts.find(c => c.gstin === r.gstin);
+    try { if (!ct) ct = saveContact({ type: 'vendor', name: r.name || `Supplier ${r.gstin}`, gstin: r.gstin, state: r.gstin.slice(0, 2), creditDays: 30 }); } catch (e) { return alert(e.message); }
+    const rate = r.taxable ? GST_RATES.reduce((b, x) => Math.abs(r.taxable * x / 100 - (r.igst + r.cgst + r.sgst)) < Math.abs(r.taxable * b / 100 - (r.igst + r.cgst + r.sgst)) ? x : b, 0) : 18;
+    F = null;
+    viewVoucherForm({ type: 'PB', partyId: ct.id, refNo: r.inv, date: r.date && r.date <= todayISO() ? r.date : todayISO(), pos: companyState(), lines: [{ itemId: '', desc: 'As per supplier invoice (from GSTR-2B)', hsn: '', qty: 1, unit: 'NOS', rate: r.taxable, disc: 0, gstRate: rate, accId: ct.lastAcc || '' }] });
+    history.replaceState(null, '', '#/new/PB');
+}
+function gstr9Html(fy) {
+    const g = gstr9(fy);
+    const row = (tbl, label, t, cls = '') => `<tr class="${cls}"><td>${tbl}</td><td style="white-space:normal">${label}</td>${amtCell(t.txval ?? 0)}${amtCell(t.iamt)}${amtCell(t.camt)}${amtCell(t.samt)}</tr>`;
+    const head = `<thead><tr><th>Table</th><th>Particulars</th><th class="n">Taxable</th><th class="n">IGST</th><th class="n">CGST</th><th class="n">SGST</th></tr></thead>`;
+    const filed = co.filings.find(f => f.type === 'GSTR-9' && f.period === `FY-${fy}`);
+    const diff6 = r2((g.avail.iamt + g.avail.camt + g.avail.samt) - (g.t6total.iamt + g.t6total.camt + g.t6total.samt));
+    const diff8 = g.months2b.length ? r2((g.in2b.iamt + g.in2b.camt + g.in2b.samt) - (g.books2b.iamt + g.books2b.camt + g.books2b.samt)) : 0;
+    return `<div class="card"><div class="row" style="justify-content:space-between"><div><h2 style="margin:0">GSTR-9 · FY ${fyLabel(fy)}</h2><div class="note">Due ${fmtDate(g.due)}${filed ? ` · <span class="badge good">Filed ${fmtDate(filed.filedOn)}</span>` : ''} · ${g.months.length} month(s) in the books</div></div>
+        <div class="row"><button class="btn btn-s btn-sm" onclick="download('GSTR9_${co.profile.gstin}_FY${fyLabel(fy)}.csv','﻿'+gstr9Csv(${fy}),'text/csv')">${ic('dl')} Excel (CSV) for the offline tool</button><button class="btn btn-s btn-sm" onclick="printReport('g9T','GSTR-9 FY ${fyLabel(fy)}')">${ic('print')} Print</button>${!filed && canEdit() ? `<button class="btn btn-p btn-sm" onclick="calFile('GSTR-9','FY-${fy}')">Mark as filed</button>` : ''}</div></div>
+        <ol class="steps" style="margin-top:10px"><li>File every GSTR-1 and GSTR-3B of the year first.</li><li>On the portal open GSTR-9: most tables are filled from your returns. Download the "system computed" PDF.</li><li>Compare each table with this screen; enter differences (the CSV matches the offline tool's sheets).</li><li>Check the warnings below, pay any extra tax with DRC-03, file with DSC / EVC, then mark it filed here.</li></ol>
+        ${Math.abs(diff6) > 1 ? `<div class="warns">Table 6J: credit availed in GSTR-3B differs from the bills by ${inr(diff6)}. Check reversals and credit claimed in a later month.</div>` : ''}
+        ${g.months2b.length < g.months.length ? `<div class="note" style="margin:8px 0">Table 8 (credit as per GSTR-2B): 2B imported for ${g.months2b.length} of ${g.months.length} month(s). Import the rest on the GSTR-2B tab to complete the comparison.</div>` : ''}
+        ${Math.abs(diff8) > 1 ? `<div class="warns">Table 8D: GSTR-2B shows ${inr(Math.abs(diff8))} ${diff8 > 0 ? 'more' : 'less'} credit than your bills for the ${g.months2b.length} month(s) with 2B imported.${diff8 > 0 ? ' Unclaimed credit lapses after 30 November.' : ' Credit taken without 2B support may have to be reversed with interest.'}</div>` : ''}
+        ${g.needs9c ? `<div class="warns">Turnover above ₹5 crore: GSTR-9C (self-certified reconciliation) is also needed. Turnover in the books ${inr(g.booksTurnover)} vs declared ${inr(g.turnover)}: difference ${inr(g.booksTurnover - g.turnover)} (credit notes, unbilled revenue or other income explain most differences).</div>` : ''}
+        <div class="tw" id="g9T"><table class="t">${head}<tbody>
+        <tr class="head"><td colspan="6">Pt II · Outward supplies on which tax is payable (table 4)</td></tr>
+        ${row('4A', 'Supplies to unregistered persons (B2C)', g.T4.A)}${row('4B', 'Supplies to registered persons (B2B)', g.T4.B)}${row('4C', 'Exports on payment of tax', g.T4.C)}${row('4D', 'SEZ supplies on payment of tax', g.T4.D)}${row('4G', 'Inward supplies on reverse charge', g.T4.G)}${row('4I', 'Credit notes (−)', g.T4.I)}${row('4N', 'Total', g.T4.N, 'sub')}
+        <tr class="head"><td colspan="6">Outward supplies on which tax is not payable (table 5)</td></tr>
+        ${row('5A', 'Exports without payment of tax', g.T5.A)}${row('5B', 'SEZ supplies without payment of tax', g.T5.B)}${row('5E', 'Exempted / nil rated', g.T5.E)}${row('5H', 'Credit notes (−)', g.T5.H)}${row('5N', 'Total', g.T5.N, 'sub')}
+        <tr class="grand"><td>5N+4N</td><td>Total turnover</td>${amtCell(g.turnover)}<td></td><td></td><td></td></tr>
+        <tr class="head"><td colspan="6">Pt III · Input tax credit (tables 6–8)</td></tr>
+        ${row('6A', 'Total credit availed through GSTR-3B', g.avail, 'sub')}${row('6B', 'Inputs', g.T6.inputs)}${row('6B', 'Capital goods', g.T6.capital)}${row('6B', 'Input services', g.T6.services)}${row('6C', 'Reverse charge – unregistered suppliers', g.T6.rcmUnreg)}${row('6D', 'Reverse charge – registered suppliers', g.T6.rcmReg)}${row('6O', 'Total (6B–6H)', g.t6total, 'sub')}
+        ${row('7', 'Credit reversed (debit notes)', g.T7)}${row('8A', 'Credit as per GSTR-2B', g.in2b)}
+        <tr class="head"><td colspan="6">Pt IV · Tax paid (table 9)</td></tr>
+        ${row('9', 'Tax payable', g.pay.payable)}${row('9', 'Paid through credit', g.pay.itc)}${row('9', 'Paid in cash', g.pay.cash)}
+        </tbody></table></div>
+        <h2 style="margin-top:14px">Table 17 · HSN summary of outward supplies</h2><div class="tw"><table class="t"><thead><tr><th>HSN</th><th>UQC</th><th class="n">Rate</th><th class="n">Qty</th><th class="n">Taxable</th><th class="n">IGST</th><th class="n">CGST</th><th class="n">SGST</th></tr></thead><tbody>${g.hsn.map(h => `<tr><td>${esc(h.hsn)}</td><td>${esc(h.uqc)}</td><td class="n">${h.rt}%</td><td class="n">${r2(h.qty)}</td>${amtCell(h.txval)}${amtCell(h.iamt)}${amtCell(h.camt)}${amtCell(h.samt)}</tr>`).join('')}</tbody></table></div></div>`;
 }

@@ -70,6 +70,10 @@ function createSampleCompany() {
         landlord: ct({ type: 'vendor', name: 'Shanthi Properties', pan: 'AAAPS1234B', state: '33', city: 'Chennai', tdsSection: '194I-B', creditDays: 5 }),
         airtel: ct({ type: 'vendor', name: 'Bharti Airtel Ltd', gstin: makeGstin('33', 'AAACB2894G'), state: '33', city: 'Chennai', creditDays: 15 })
     };
+    // Staff on the payroll (gross ₹90,000 a month)
+    [['Arun Prakash', 'Sales', 'Sales Manager', 22000, 1500, 'ABKPA1234F'], ['Deepa Raman', 'Accounts', 'Accountant', 18000, 0, 'BCRPD4567K'], ['Saravanan K', 'Stores', 'Storekeeper', 15000, 0, ''],
+     ['Meena S', 'Office', 'Billing Executive', 14000, 0, ''], ['Rafiq Ahmed', 'Service', 'Electrician', 12000, 0, ''], ['Kumar V', 'Stores', 'Helper', 9000, 0, '']]
+        .forEach(([name, dept, desig, salary, tds, pan], i) => saveEmployee({ name, dept, desig, salary, tdsMonthly: tds, pan, code: `KE${String(i + 1).padStart(3, '0')}`, doj: `${startFy - 2 - (i % 3)}-0${(i % 9) + 1}-10`, uan: `10${String(1000000000 + i * 7919).slice(0, 10)}`, pf: true, esi: true, basicPct: 50, status: 'Active', source: 'manual' }));
     // Balance the opening position through opening surplus
     const diff = openingDifference();
     const sa = accById(surplus);
@@ -166,7 +170,17 @@ function createSampleCompany() {
         payOff(C.ramesh, 26, 20); payOff(C.polycab, 28, 30); payOff(C.landlord, 5, 0); payOff(C.airtel, 28, 0); payOff(C.gta, 20, 3); payOff(C.advocate, 28, 5);
         if (mi === 0 && d(ym, 15)) { const op = Number(contactById(C.ramesh).openCr); sv({ type: 'PY', date: d(ym, 15), accountId: bank, partyId: C.ramesh, amount: op, narration: 'Opening balance cleared' }); sv({ type: 'RC', date: d(ym, 15), accountId: bank, partyId: C.prakash, amount: 120000, narration: 'Opening balance received' }); }
         // ---- running costs ----
-        if (d(ym, 1)) sv({ type: 'PY', date: d(ym, 1), accountId: bank, ledgerId: sysId('salary'), amount: 90000, narration: `Salaries for ${ymLabel(prev)}` });
+        // Payroll for last month: post on the last day, pay on the 1st, PF / ESI by the 14th, salary TDS by the 6th
+        if (d(ym, 1) && prev >= ymOf(co.profile.booksFrom)) {
+            draftRun(prev);
+            postPayroll(prev, { date: lastDay(prev) });
+            paySalaries(prev, bank, d(ym, 1), `SAL${prev.replace('-', '')}`);
+            statDues(fyOf(prev + '-01')).filter(x => x.ym === prev && x.pending > 0.5 && x.k !== 'pt').forEach(x => {
+                const day = x.k === 'tds' ? 6 : 14;
+                if (d(ym, day)) sv({ type: 'PY', date: d(ym, day), accountId: bank, ledgerId: sysId(STAT[x.k].ledger), taxMonth: prev, amount: x.pending, challan: x.k === 'tds' ? { bsr: '0510308', serial: String(between(10000, 99999)) } : undefined, narration: `${STAT[x.k].label} for ${ymLabel(prev)}` });
+            });
+            statDues(fyOf(prev + '-01')).filter(x => x.k === 'pt' && x.ym === prev && x.pending > 0.5).forEach(x => { if (d(ym, 20)) sv({ type: 'PY', date: d(ym, 20), accountId: bank, ledgerId: sysId('ptPay'), taxMonth: prev, amount: x.pending, narration: `Professional tax for the half-year ending ${ymLabel(prev)}` }); });
+        }
         if (d(ym, 10)) sv({ type: 'PY', date: d(ym, 10), accountId: bank, ledgerId: elec, amount: between(9, 16) * 1000, narration: 'TNPDCL electricity bill' });
         if (d(ym, 5)) { sv({ type: 'PY', date: d(ym, 5), accountId: bank, ledgerId: sysId('interest'), amount: 5000, narration: 'Term loan interest' }); sv({ type: 'PY', date: d(ym, 5), accountId: bank, ledgerId: loan, amount: 10000, narration: 'Term loan EMI principal' }); }
         if (d(ym, 29)) {
@@ -199,7 +213,7 @@ function createSampleCompany() {
         if (taxRegister('tcs', fyOf(m + '-01')).months.find(x => x.ym === m)?.deducted) markFiled('TCS-PAY', m, `CIN${between(10000000, 99999999)}`, `${addMonths(m, 1)}-06`);
     });
     [startFy, startFy + 1].forEach(fy => {
-        [['Q1', `${fy}-07-31`], ['Q2', `${fy}-10-31`], ['Q3', `${fy + 1}-01-31`], ['Q4', `${fy + 1}-05-31`]].forEach(([q, due]) => { if (due < today) { markFiled('FORM-140', `${q}-${fy}`, `TOKEN${between(100000, 999999)}`, addDays(due, -5)); if (taxRegister('tcs', fy).rows.some(r => QUARTERS[q].includes(Number(r.month.slice(5))))) markFiled('FORM-143', `${q}-${fy}`, `TOKEN${between(100000, 999999)}`, addDays(due, -5)); } });
+        [['Q1', `${fy}-07-31`], ['Q2', `${fy}-10-31`], ['Q3', `${fy + 1}-01-31`], ['Q4', `${fy + 1}-05-31`]].forEach(([q, due]) => { if (due < today) { markFiled('FORM-140', `${q}-${fy}`, `TOKEN${between(100000, 999999)}`, addDays(due, -5)); markFiled('FORM-138', `${q}-${fy}`, `TOKEN${between(100000, 999999)}`, addDays(due, -5)); if (taxRegister('tcs', fy).rows.some(r => QUARTERS[q].includes(Number(r.month.slice(5))))) markFiled('FORM-143', `${q}-${fy}`, `TOKEN${between(100000, 999999)}`, addDays(due, -5)); } });
         [['15%', `${fy}-06-15`], ['45%', `${fy}-09-15`], ['75%', `${fy}-12-15`], ['100%', `${fy + 1}-03-15`]].forEach(([p, due]) => { if (due < today) markFiled('ADV-TAX', `${p}-${fy}`, `CIN${between(10000000, 99999999)}`, due); });
         if (`${fy + 1}-12-31` < today) markFiled('GSTR-9', `FY-${fy}`, 'ARN');
         if (`${fy}-10-31` < today) markFiled('MSME-1', `H1-${fy}`, 'SRN');

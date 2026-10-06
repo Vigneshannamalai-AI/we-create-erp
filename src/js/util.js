@@ -45,6 +45,7 @@ function addMonths(ym, n) {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
 const lastDay = ym => iso(new Date(Number(ym.slice(0, 4)), Number(ym.slice(5)), 0));
+const daysIn = ym => Number(lastDay(ym).slice(8));
 // Indian financial year: 1 April to 31 March. fyOf returns the starting calendar year.
 const fyOf = s => { const y = Number(s.slice(0, 4)), m = Number(s.slice(5, 7)); return m >= 4 ? y : y - 1; };
 const fyLabel = y => `${y}-${String(y + 1).slice(2)}`;

@@ -87,21 +87,28 @@ function gstr3b(ym) {
         else add(a, v, s);
         if (v.kind === 'B2C' && v.totals.inter) { const x = interUnreg[v.pos] ||= { pos: v.pos, txval: 0, iamt: 0 }; x.txval += s * v.totals.taxable; x.iamt += s * v.totals.igst; }
     }));
+    const basis = has2b(ym) ? '2B' : 'books';
+    const deferred = z();
     bills.forEach(v => {
         if (v.rcm) { add(d, v, 1); add(itcRcm, v, 1); return; }
         if (v.itc === false) { add(ineligible, v, 1); return; }
-        if (v.totals.tax) add(itcOther, v, 1);
+        if (v.totals.tax && (basis === 'books' || !isRegistered(contactById(v.partyId)))) add(itcOther, v, 1);
+    });
+    if (basis === '2B') recon2b(ym).forEach(x => {
+        if (x.claim) { itcOther.iamt += x.claim.iamt; itcOther.camt += x.claim.camt; itcOther.samt += x.claim.samt; }
+        if (x.v && ymOf(x.v.date) === ym && (!x.claim || x.status === 'Mismatch')) { const c = x.claim || { iamt: 0, camt: 0, samt: 0 }; deferred.iamt += x.v.totals.igst - c.iamt; deferred.camt += x.v.totals.cgst - c.camt; deferred.samt += x.v.totals.sgst - c.samt; }
     });
     dns.forEach(v => { if (!v.rcm && v.itc !== false && v.totals.tax) add(reversal, v, 1); });
     const R = o => Object.fromEntries(Object.entries(o).map(([k, x]) => [k, r2(x)]));
     const itcAvail = R({ iamt: itcRcm.iamt + itcOther.iamt, camt: itcRcm.camt + itcOther.camt, samt: itcRcm.samt + itcOther.samt });
     // Credit left over from earlier months (what is still in the input ledgers at the end of last month)
     const prevEnd = lastDay(addMonths(ym, -1));
-    const carryIn = R({ iamt: Math.max(0, balance(sysId('inIgst'), prevEnd)), camt: Math.max(0, balance(sysId('inCgst'), prevEnd)), samt: Math.max(0, balance(sysId('inSgst'), prevEnd)) });
+    const pend = itcPending(addMonths(ym, -1));
+    const carryIn = R({ iamt: Math.max(0, balance(sysId('inIgst'), prevEnd) - pend.iamt), camt: Math.max(0, balance(sysId('inCgst'), prevEnd) - pend.camt), samt: Math.max(0, balance(sysId('inSgst'), prevEnd) - pend.samt) });
     const itcNet = R({ iamt: itcAvail.iamt - reversal.iamt + carryIn.iamt, camt: itcAvail.camt - reversal.camt + carryIn.camt, samt: itcAvail.samt - reversal.samt + carryIn.samt });
     const liab = R({ iamt: a.iamt + b.iamt, camt: a.camt, samt: a.samt });
     const rcmLiab = R({ iamt: d.iamt, camt: d.camt, samt: d.samt });
-    return { ym, carryIn, a: R(a), b: R(b), c: R(c), d: R(d), interUnreg: Object.values(interUnreg).map(R), itcRcm: R(itcRcm), itcOther: R(itcOther), reversal: R(reversal), ineligible: R(ineligible), itcAvail, itcNet, liab, rcmLiab, setoff: setOff(liab, itcNet, rcmLiab) };
+    return { ym, basis, deferred: R(deferred), carryIn, a: R(a), b: R(b), c: R(c), d: R(d), interUnreg: Object.values(interUnreg).map(R), itcRcm: R(itcRcm), itcOther: R(itcOther), reversal: R(reversal), ineligible: R(ineligible), itcAvail, itcNet, liab, rcmLiab, setoff: setOff(liab, itcNet, rcmLiab) };
 }
 // Rule 88A order: IGST credit first (IGST, then CGST/SGST); CGST credit → CGST then IGST; SGST credit → SGST then IGST. RCM is paid in cash.
 function setOff(liab, itc, rcm) {
@@ -225,23 +232,68 @@ function import2b(text, period) {
     saveCo();
     return { period, count: rows.length };
 }
+// Matches the month's purchase bills with GSTR-2B. Also picks up bills from earlier months that the supplier has
+// only now filed. Each line says what to do and how much input credit can be claimed this month.
+const has2b = ym => co.gstr2b.some(r => r.period === ym);
+const taxSplit = v => ({ iamt: v.totals.igst, camt: v.totals.cgst, samt: v.totals.sgst });
+const itcBills = () => co.vouchers.filter(v => v.type === 'PB' && v.status !== 'cancelled' && !v.rcm && v.itc !== false && v.totals.tax && isRegistered(contactById(v.partyId)));
 function recon2b(period) {
     const bills = activeIn(['PB'], period).filter(v => !v.rcm && isRegistered(contactById(v.partyId)));
     const portal = co.gstr2b.filter(r => r.period === period);
     const used = new Set();
     const out = [];
+    const claimedBefore = claimedMap(addMonths(period, -1));
     bills.forEach(v => {
         const g = contactById(v.partyId).gstin;
         const m = portal.find(r => !used.has(r.id) && r.gstin === g && normInv(r.inv) === normInv(v.refNo));
         const bookTax = v.totals.tax;
-        if (!m) { out.push({ status: 'Only in books', v, bookTax, note: 'Supplier has not filed it: ITC cannot be claimed yet (Section 16(2)(aa)).' }); return; }
+        const name = contactById(v.partyId).name;
+        if (!m) { out.push({ status: 'Only in books', v, bookTax, claim: null, note: 'The supplier has not filed this invoice yet, so its credit cannot be claimed this month (section 16(2)(aa)).', action: `Ask ${name} to file it in their GSTR-1 / IFF. The credit is carried forward and claimed automatically in the month it appears in 2B.` }); return; }
         used.add(m.id);
         const portalTax = r2(m.igst + m.cgst + m.sgst);
         const ok = Math.abs(portalTax - bookTax) <= 1 && Math.abs(m.taxable - v.totals.taxable) <= 1;
-        out.push({ status: ok ? 'Matched' : 'Mismatch', v, r: m, bookTax, portalTax, note: ok ? '' : `Taxable ${inr(v.totals.taxable)} vs ${inr(m.taxable)}, tax ${inr(bookTax)} vs ${inr(portalTax)}` });
+        const rejected = m.ims === 'Rejected';
+        const lower = portalTax < bookTax ? { iamt: m.igst, camt: m.cgst, samt: m.sgst } : taxSplit(v);
+        out.push({ status: ok ? 'Matched' : 'Mismatch', v, r: m, bookTax, portalTax, claim: rejected ? null : (ok ? taxSplit(v) : lower),
+            note: ok ? '' : `Taxable ${inr(v.totals.taxable)} vs ${inr(m.taxable)}, tax ${inr(bookTax)} vs ${inr(portalTax)}`,
+            action: rejected ? 'Rejected in IMS — no credit.' : ok ? 'Claim in full.' : portalTax < bookTax ? `Claim ${inr(portalTax)} (the lower amount). Ask ${name} to amend their GSTR-1, or check your bill entry.` : `Claim ${inr(bookTax)} as per your bill; the supplier has reported more — check whether your bill entry is short.` });
     });
-    portal.filter(r => !used.has(r.id)).forEach(r => out.push({ status: 'Only in 2B', r, portalTax: r2(r.igst + r.cgst + r.sgst), note: 'Not in your books: enter the bill, or reject it in IMS if it is not yours.' }));
+    portal.filter(r => !used.has(r.id)).forEach(r => {
+        const portalTax = r2(r.igst + r.cgst + r.sgst);
+        const earlier = itcBills().find(v => v.date < `${period}-01` && contactById(v.partyId).gstin === r.gstin && normInv(v.refNo) === normInv(r.inv));
+        if (earlier && !claimedBefore[earlier.id]) {
+            const lower = portalTax < earlier.totals.tax ? { iamt: r.igst, camt: r.cgst, samt: r.sgst } : taxSplit(earlier);
+            out.push({ status: 'Earlier bill, now in 2B', v: earlier, r, bookTax: earlier.totals.tax, portalTax, claim: r.ims === 'Rejected' ? null : lower, note: `Bill of ${fmtDate(earlier.date)} that the supplier filed late.`, action: 'Claim it this month.' });
+            return;
+        }
+        out.push({ status: 'Only in 2B', r, portalTax, claim: null, note: 'Not in your books.', action: 'If it is your purchase, enter the bill (button below) and it is claimed this month. If it is not yours or is wrong, mark it Rejected in IMS before filing GSTR-3B.' });
+    });
     return out;
+}
+// For each bill: how much credit has been claimed through GSTR-2B up to and including a month
+function claimedMap(uptoYm) {
+    const m = {};
+    [...new Set(co.gstr2b.map(r => r.period))].filter(p => p <= uptoYm).sort().forEach(p => {
+        recon2bLite(p, m);
+    });
+    return m;
+}
+function recon2bLite(period, m) {
+    const portal = co.gstr2b.filter(r => r.period === period && r.ims !== 'Rejected');
+    portal.forEach(r => {
+        const v = itcBills().find(b => b.date <= lastDay(period) && contactById(b.partyId).gstin === r.gstin && normInv(b.refNo) === normInv(r.inv));
+        if (v && !m[v.id]) { const pt = r2(r.igst + r.cgst + r.sgst); m[v.id] = pt < v.totals.tax ? { iamt: r.igst, camt: r.cgst, samt: r.sgst } : taxSplit(v); }
+    });
+}
+// Credit sitting in the input ledgers that cannot be claimed yet (bills of months with 2B imported, not yet in 2B)
+function itcPending(uptoYm) {
+    const claimed = claimedMap(uptoYm);
+    const P = { iamt: 0, camt: 0, samt: 0 };
+    itcBills().filter(v => ymOf(v.date) <= uptoYm && has2b(ymOf(v.date))).forEach(v => {
+        const c = claimed[v.id] || { iamt: 0, camt: 0, samt: 0 };
+        P.iamt += v.totals.igst - c.iamt; P.camt += v.totals.cgst - c.camt; P.samt += v.totals.sgst - c.samt;
+    });
+    return { iamt: r2(P.iamt), camt: r2(P.camt), samt: r2(P.samt) };
 }
 
 // ---------- TDS ----------
@@ -345,7 +397,19 @@ function complianceItems(fy) {
         if (hasTds && (open || tdsReg.months.find(m => m.ym === ym)?.deducted)) add('TDS-PAY', ym, depositDue(ym), `TDS deposit · ${ymLabel(ym)}`, 'Income-tax Act 2025');
         if (hasTcs && (open || tcsReg.months.find(m => m.ym === ym)?.deducted)) add('TCS-PAY', ym, depositDue(ym), `TCS deposit · ${ymLabel(ym)}`, 'Income-tax Act 2025 s.394');
     });
+    // Payroll dues: PF and ESI by the 15th, TDS on salary by the 7th, Form 138 quarterly
+    const runs = Object.entries(co.payroll || {}).filter(([ym, r]) => r.status !== 'draft' && fyOf(ym + '-01') === fy);
+    runs.forEach(([ym, r]) => {
+        const T = runTotals(r);
+        const paid = k => sum(co.vouchers.filter(v => v.type === 'PY' && v.status !== 'cancelled' && v.ledgerId === sysId(STAT[k].ledger) && v.taxMonth === ym), 'amount');
+        [['pf', 'PF-PAY', 'PF deposit (EPFO ECR)', 'EPF Act'], ['esi', 'ESI-PAY', 'ESI deposit', 'ESI Act'], ['tds', 'TDSSAL-PAY', 'TDS on salary deposit', 'Income-tax Act 2025 s.392']].forEach(([k, type, label, law]) => {
+            const amt = STAT[k].amt(T);
+            if (!amt) return;
+            items.push({ type, period: ym, due: STAT[k].due(ym), label: `${label} · ${ymLabel(ym)}`, law, filed: paid(k) >= amt - 0.5 ? { filedOn: '', ref: 'Paid' } : null });
+        });
+    });
     Object.keys(QUARTERS).forEach(q => {
+        if (runs.some(([ym, r]) => quarterOf(ym) === q && runTotals(r).tds)) add('FORM-138', `${q}-${fy}`, returnDue(fy, q), `Salary TDS return Form 138 (old 24Q) · ${q}`, 'Income-tax Act 2025 s.397');
         if (hasTds) add('FORM-140', `${q}-${fy}`, returnDue(fy, q), `TDS return Form 140 (old 26Q) · ${q}`, 'Income-tax Act 2025 s.397');
         if (hasTcs) add('FORM-143', `${q}-${fy}`, returnDue(fy, q), `TCS return Form 143 (old 27EQ) · ${q}`, 'Income-tax Act 2025 s.397');
     });
@@ -531,4 +595,126 @@ function draftFromBill(p) {
     };
     const newParty = !party && partyGstin ? { type: type === 'PB' ? 'vendor' : 'customer', name: p.sellerName || `Party ${partyGstin}`, gstin: partyGstin, state: partyGstin.slice(0, 2), pan: partyGstin.slice(2, 12) } : null;
     return { type, v, newParty, partyGstin };
+}
+
+// ---------- filing advisor: what to check and what to do, month by month ----------
+function gstAdvice(ym) {
+    const A = [];
+    const add = (level, text, how, route) => A.push({ level, text, how, route });
+    const g1 = gstr1(ym), g3 = gstr3b(ym);
+    const sales = activeIn(['SI'], ym);
+    const due1 = co.profile.gstFreq === 'quarterly' ? '' : `${addMonths(ym, 1)}-11`, due3 = `${addMonths(ym, 1)}-20`;
+    const filed = t => co.filings.some(f => f.type === t && (f.period === ym || f.period === `${quarterOf(ym)}-${fyOf(ym + '-01')}`));
+    // GSTR-1
+    const noIrn = sales.filter(v => einvoiceApplies(v) && !v.irn);
+    if (noIrn.length) add('bad', `${noIrn.length} B2B invoice(s) have no e-invoice IRN`, 'Generate the IRN first — invoices without one are not valid above ₹5 crore turnover, and the IRP refuses them after 30 days (₹10 crore+).', '#/gst/ein');
+    const b2cNoPos = sales.filter(v => v.kind === 'B2C' && !v.pos);
+    if (b2cNoPos.length) add('warn', `${b2cNoPos.length} B2C invoice(s) without a place of supply`, 'Open each and choose the state; GSTR-1 table 7 needs it.', '#/sales');
+    if (!filed('GSTR-1')) add('info', `GSTR-1: ${g1.summary.invoices} invoice(s), ${g1.summary.notes} credit note(s), taxable ${inr(g1.summary.taxable)}`, `Download the JSON on the GSTR-1 tab, upload it on the portal (Returns Dashboard → GSTR-1 → Prepare offline → Upload), check the summary, file with EVC/DSC by ${due1 ? fmtDate(due1) : 'the 13th after the quarter'}, then enter the ARN here.`, '#/gst/r1');
+    // GSTR-2B
+    if (!has2b(ym) && activeIn(['PB'], ym).some(v => !v.rcm && v.totals.tax)) add('warn', 'GSTR-2B not imported for this month', `Download GSTR-2B (JSON) from the portal (available on the 14th) and import it on the GSTR-2B tab. Until then input credit is shown as per your books, which may be more than you can legally claim.`, '#/gst/2b');
+    if (has2b(ym)) {
+        const R = recon2b(ym);
+        const cnt = st => R.filter(x => x.status === st).length;
+        if (cnt('Only in books')) add('warn', `${cnt('Only in books')} bill(s) not yet in the supplier's GSTR-1`, `Credit of ${inr(g3.deferred.iamt + g3.deferred.camt + g3.deferred.samt)} is held back and claimed automatically when it appears. Remind the suppliers.`, '#/gst/2b');
+        if (cnt('Only in 2B')) add('warn', `${cnt('Only in 2B')} invoice(s) in 2B are not in your books`, 'Enter the bill if it is yours; otherwise reject it in IMS before filing GSTR-3B.', '#/gst/2b');
+        if (cnt('Mismatch')) add('warn', `${cnt('Mismatch')} amount mismatch(es) with 2B`, 'The lower amount is claimed. Check your entry or ask the supplier to amend.', '#/gst/2b');
+        if (cnt('Earlier bill, now in 2B')) add('info', `${cnt('Earlier bill, now in 2B')} earlier bill(s) now in 2B`, 'Their credit is included in this month\'s GSTR-3B.', '#/gst/2b');
+    }
+    // GSTR-3B
+    const cash = g3.setoff.totalCash;
+    if (!filed('GSTR-3B')) add(cash > 0 ? 'info' : 'good', `GSTR-3B: pay ${inr(cash)} in cash${cash ? ` (IGST ${inr(g3.setoff.cash.iamt)}, CGST ${inr(g3.setoff.cash.camt)}, SGST ${inr(g3.setoff.cash.samt)})` : ''}`, `The portal fills outward tax from your GSTR-1 (locked) and credit from GSTR-2B. Compare every box with the GSTR-3B tab, adjust credit if needed, create the challan (PMT-06) for the cash part, file by ${fmtDate(due3)}, then press "Post set-off journal" and record the payment here.`, '#/gst/r3b');
+    if (!filed('GSTR-3B') && due3 < todayISO()) {
+        const days = daysBetween(due3, todayISO());
+        add('bad', `GSTR-3B is ${days} day(s) late`, `Late fee ₹${Math.min(days * (cash ? 50 : 20), 10000)} so far (₹50 a day, ₹20 for a nil return) and interest at 18% a year on the cash tax (≈ ${inr(Math.round(cash * 0.18 * days / 365))}).`, '#/gst/r3b');
+    }
+    if (g3.ineligible.iamt + g3.ineligible.camt + g3.ineligible.samt) add('info', `${inr(g3.ineligible.iamt + g3.ineligible.camt + g3.ineligible.samt)} blocked credit (section 17(5))`, 'Report it in table 4(D)(1); it is already part of the cost in your books.', '#/gst/r3b');
+    return A;
+}
+
+// GSTR-3B in the GSTN data format (for GST Suvidha Providers / tax-professional software)
+function gstr3bJson(ym) {
+    const g = gstr3b(ym);
+    const t = x => ({ txval: r2(x.txval || 0), iamt: r2(x.iamt || 0), camt: r2(x.camt || 0), samt: r2(x.samt || 0), csamt: 0 });
+    const tx = x => ({ iamt: r2(x.iamt || 0), camt: r2(x.camt || 0), samt: r2(x.samt || 0), csamt: 0 });
+    return {
+        gstin: co.profile.gstin, ret_period: ym.slice(5) + ym.slice(0, 4),
+        sup_details: { osup_det: t(g.a), osup_zero: t(g.b), osup_nil_exmp: t(g.c), isup_rev: t(g.d), osup_nongst: t({}) },
+        inter_sup: { unreg_details: g.interUnreg.map(x => ({ pos: x.pos, txval: r2(x.txval), iamt: r2(x.iamt) })), comp_details: [], uin_details: [] },
+        itc_elg: {
+            itc_avl: [{ ty: 'IMPG', ...tx({}) }, { ty: 'IMPS', ...tx({}) }, { ty: 'ISRC', ...tx(g.itcRcm) }, { ty: 'ISD', ...tx({}) }, { ty: 'OTH', ...tx(g.itcOther) }],
+            itc_rev: [{ ty: 'RUL', ...tx({}) }, { ty: 'OTH', ...tx(g.reversal) }],
+            itc_net: tx({ iamt: g.itcAvail.iamt - g.reversal.iamt, camt: g.itcAvail.camt - g.reversal.camt, samt: g.itcAvail.samt - g.reversal.samt }),
+            itc_inelg: [{ ty: 'RUL', ...tx(g.ineligible) }, { ty: 'OTH', ...tx({}) }]
+        },
+        inward_sup: { isup_details: [{ ty: 'GST', inter: 0, intra: 0 }, { ty: 'NONGST', inter: 0, intra: 0 }] }
+    };
+}
+
+// ---------- GSTR-9 annual return (and the GSTR-9C reconciliation above ₹5 crore) ----------
+function gstr9(fy) {
+    const months = fyMonths(fy).filter(m => lastDay(m) >= co.profile.booksFrom && m <= ymOf(todayISO()));
+    const V = co.vouchers.filter(v => v.status !== 'cancelled' && fyOf(v.date) === fy);
+    const z = () => ({ txval: 0, iamt: 0, camt: 0, samt: 0 });
+    const add = (t, v, s = 1) => { t.txval += s * v.totals.taxable; t.iamt += s * v.totals.igst; t.camt += s * v.totals.cgst; t.samt += s * v.totals.sgst; };
+    const T4 = { A: z(), B: z(), C: z(), D: z(), G: z(), I: z(), J: z() }, T5 = { A: z(), B: z(), D: z(), E: z(), H: z() };
+    V.filter(v => v.type === 'SI').forEach(v => {
+        if (v.kind === 'EXP') add(v.zeroWithPay ? T4.C : T5.A, v);
+        else if (v.kind === 'SEZ') add(v.zeroWithPay ? T4.D : T5.B, v);
+        else if (v.totals.tax === 0) add(T5.E, v);
+        else add(v.kind === 'B2B' ? T4.B : T4.A, v);
+    });
+    V.filter(v => v.type === 'CN').forEach(v => add(v.totals.tax ? T4.I : T5.H, v));
+    V.filter(v => v.type === 'PB' && v.rcm).forEach(v => add(T4.G, v));
+    const sumT = (...ts) => ts.reduce((a, t) => ({ txval: a.txval + t.txval, iamt: a.iamt + t.iamt, camt: a.camt + t.camt, samt: a.samt + t.samt }), z());
+    const neg = t => ({ txval: -t.txval, iamt: -t.iamt, camt: -t.camt, samt: -t.samt });
+    T4.N = sumT(T4.A, T4.B, T4.C, T4.D, T4.G, neg(T4.I), T4.J);
+    T5.N = sumT(T5.A, T5.B, T5.D, T5.E, neg(T5.H));
+    // Table 5N = 4N + 5M − 4G: reverse-charge purchases are not our turnover
+    const turnover = r2(T4.N.txval - T4.G.txval + T5.N.txval);
+    // Table 6: credit availed through GSTR-3B, split by type of purchase
+    const r3 = months.map(m => gstr3b(m));
+    const avail = r3.reduce((a, g) => sumT(a, { txval: 0, ...g.itcOther }, { txval: 0, ...g.itcRcm }), z());
+    const typeOf = v => (v.lines || []).every(l => itemById(l.itemId)?.type === 'service' || String(l.hsn).startsWith('99')) ? 'services' : (v.lines || []).some(l => accById(l.accId || itemById(l.itemId)?.purchaseAcc)?.group === 'fixed') ? 'capital' : 'inputs';
+    const T6 = { inputs: z(), capital: z(), services: z(), rcmUnreg: z(), rcmReg: z() };
+    V.filter(v => v.type === 'PB' && v.itc !== false && v.totals.tax).forEach(v => {
+        if (v.rcm) add(isRegistered(contactById(v.partyId)) ? T6.rcmReg : T6.rcmUnreg, v);
+        else add(T6[typeOf(v)], v);
+    });
+    const t6total = sumT(T6.inputs, T6.capital, T6.services, T6.rcmUnreg, T6.rcmReg);
+    const T7 = V.filter(v => v.type === 'DN' && v.itc !== false && !v.rcm).reduce((a, v) => (add(a, v), a), z());
+    // Table 8: compare only the months whose GSTR-2B has been imported
+    const months2b = months.filter(m => has2b(m));
+    const in2b = co.gstr2b.filter(r => months2b.includes(r.period)).reduce((a, r) => sumT(a, { txval: r.taxable, iamt: r.igst, camt: r.cgst, samt: r.sgst }), z());
+    const books2b = V.filter(v => v.type === 'PB' && v.itc !== false && !v.rcm && v.totals.tax && months2b.includes(ymOf(v.date))).reduce((a, v) => (add(a, v), a), z());
+    // Table 9: tax payable and how it was paid
+    const pay = r3.reduce((a, g) => {
+        const u = g.setoff.use;
+        a.payable = sumT(a.payable, { txval: 0, ...g.liab }, { txval: 0, ...g.rcmLiab });
+        a.itc = sumT(a.itc, { txval: 0, iamt: u.iamt.iamt + u.camt.iamt + u.samt.iamt, camt: u.iamt.camt + u.camt.camt, samt: u.iamt.samt + u.samt.samt });
+        a.cash = sumT(a.cash, { txval: 0, ...g.setoff.cash });
+        return a;
+    }, { payable: z(), itc: z(), cash: z() });
+    // Table 17: HSN summary of outward supplies
+    const hsn = {};
+    V.filter(v => ['SI', 'CN'].includes(v.type)).forEach(v => (v.lines || []).forEach(l => { const s = v.type === 'CN' ? -1 : 1; const k = `${l.hsn}|${l.unit}|${l.effRate}`; const h = hsn[k] ||= { hsn: l.hsn, uqc: l.unit || 'OTH', rt: l.effRate, qty: 0, txval: 0, iamt: 0, camt: 0, samt: 0 }; h.qty += s * l.qty; h.txval += s * l.taxable; h.iamt += s * l.igst; h.camt += s * l.cgst; h.samt += s * l.sgst; }));
+    // GSTR-9C: turnover in the books vs turnover declared
+    const pl = plData(fyStart(fy) < co.profile.booksFrom ? co.profile.booksFrom : fyStart(fy), fyEnd(fy) < todayISO() ? fyEnd(fy) : todayISO());
+    const booksTurnover = r2(pl.tot(pl.revenue));
+    const R = o => Object.fromEntries(Object.entries(o).map(([k, x]) => [k, typeof x === 'object' ? Object.fromEntries(Object.entries(x).map(([a, b]) => [a, r2(b)])) : x]));
+    return { fy, months, T4: R(T4), T5: R(T5), turnover, avail: R({ a: avail }).a, T6: R(T6), t6total: R({ a: t6total }).a, T7: R({ a: T7 }).a, in2b: R({ a: in2b }).a, books2b: R({ a: books2b }).a, months2b, pay: R(pay), hsn: Object.values(hsn).map(h => R({ a: h }).a), booksTurnover, needs9c: Math.max(turnover, booksTurnover) > 50000000,   // 9C: aggregate turnover of this year above ₹5 crore
+        due: `${fy + 1}-12-31` };
+}
+function gstr9Csv(fy) {
+    const g = gstr9(fy);
+    const row = (tbl, label, t) => [tbl, label, t.txval ?? '', t.iamt, t.camt, t.samt];
+    const rows = [['Table', 'Particulars', 'Taxable value', 'IGST', 'CGST', 'SGST'],
+        row('4A', 'Supplies to unregistered persons (B2C)', g.T4.A), row('4B', 'Supplies to registered persons (B2B)', g.T4.B), row('4C', 'Exports on payment of tax', g.T4.C), row('4D', 'SEZ supplies on payment of tax', g.T4.D), row('4G', 'Inward supplies on reverse charge', g.T4.G), row('4I', 'Credit notes', g.T4.I), row('4N', 'Total (4A–4G − 4I)', g.T4.N),
+        row('5A', 'Exports without payment of tax', g.T5.A), row('5B', 'SEZ supplies without payment of tax', g.T5.B), row('5E', 'Exempted / nil rated', g.T5.E), row('5H', 'Credit notes', g.T5.H), row('5N', 'Total', g.T5.N),
+        ['5N+4N', 'Total turnover', g.turnover, '', '', ''],
+        row('6A', 'Credit availed through GSTR-3B', g.avail), row('6B', 'Inputs', g.T6.inputs), row('6B', 'Capital goods', g.T6.capital), row('6B', 'Input services', g.T6.services), row('6C', 'Reverse charge – unregistered', g.T6.rcmUnreg), row('6D', 'Reverse charge – registered', g.T6.rcmReg), row('6O', 'Total of 6B–6H', g.t6total),
+        row('7', 'Credit reversed (debit notes)', g.T7), row('8A', 'Credit as per GSTR-2B', g.in2b),
+        row('9', 'Tax payable', g.pay.payable), row('9', 'Paid through credit', g.pay.itc), row('9', 'Paid in cash', g.pay.cash),
+        [], ['17', 'HSN', 'UQC', 'Rate', 'Quantity', 'Taxable', 'IGST', 'CGST', 'SGST'], ...g.hsn.map(h => ['17', h.hsn, h.uqc, h.rt, h.qty, h.txval, h.iamt, h.camt, h.samt])];
+    return toCSV(rows);
 }

@@ -50,7 +50,10 @@ const SYS_ACCOUNTS = [
     ['roundOff', 'Round Off', 'indexp'], ['capital', "Owner's Capital", 'capital'], ['salary', 'Salaries & Wages', 'empexp'],
     ['rent', 'Rent', 'indexp'], ['freight', 'Freight Inward', 'direxp'], ['professional', 'Legal & Professional Fees', 'indexp'],
     ['depreciation', 'Depreciation', 'deprec'], ['interest', 'Interest on Loans', 'fincost'], ['bankCharges', 'Bank Charges', 'fincost'],
-    ['discountAllowed', 'Discount Allowed', 'indexp'], ['misc', 'Miscellaneous Expenses', 'indexp'], ['otherIncome', 'Interest Received', 'indinc']
+    ['discountAllowed', 'Discount Allowed', 'indexp'], ['misc', 'Miscellaneous Expenses', 'indexp'], ['otherIncome', 'Interest Received', 'indinc'],
+    ['erPf', "Employer's Contribution to PF", 'empexp'], ['erEsi', "Employer's Contribution to ESI", 'empexp'],
+    ['salPay', 'Salary Payable', 'curliab'], ['pfPay', 'PF Payable', 'duties'], ['esiPay', 'ESI Payable', 'duties'], ['ptPay', 'Professional Tax Payable', 'duties'],
+    ['tdsSalPay', 'TDS on Salary Payable', 'duties'], ['salAdv', 'Salary Advances to Staff', 'loansadv'], ['repairs', 'Repairs & Maintenance – Machinery', 'direxp']
 ];
 
 const VTYPES = {
@@ -61,7 +64,8 @@ const VTYPES = {
     RC: { name: 'Receipt', short: 'Receipt', prefix: 'RCT', key: 'F6' },
     PY: { name: 'Payment', short: 'Payment', prefix: 'PMT', key: 'F5' },
     JV: { name: 'Journal', short: 'Journal', prefix: 'JV', key: 'F7' },
-    CT: { name: 'Contra', short: 'Contra', prefix: 'CTR', key: 'F4' }
+    CT: { name: 'Contra', short: 'Contra', prefix: 'CTR', key: 'F4' },
+    SJ: { name: 'Production (stock journal)', short: 'Production', prefix: 'PRD', key: 'Alt+F7' }
 };
 const ITEM_TYPES = ['SI', 'PB', 'CN', 'DN'];
 const GST_RATES = [0, 0.25, 3, 5, 18, 40];   // GST 2.0 slabs from 22 Sep 2025 (+ 3% gold, 0.25% rough diamonds)
@@ -117,15 +121,70 @@ function safeSet(key, value) {
         return false;
     }
 }
+// Company books live in IndexedDB (hundreds of MB) instead of localStorage (5 MB, shared with the STAY BAY and
+// Eco Pack dashboards on the same site). Everything is held in memory and written behind, so the code stays simple.
+const store = (() => {
+    const cache = {};
+    let db = null, timer = null;
+    const dirty = new Set();
+    const req = r => new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+    async function init() {
+        try {
+            db = await new Promise((res, rej) => { const r = indexedDB.open('wcerp-books', 1); r.onupgradeneeded = () => r.result.createObjectStore('co'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+            const os = db.transaction('co', 'readonly').objectStore('co');
+            const [keys, vals] = await Promise.all([req(os.getAllKeys()), req(os.getAll())]);
+            keys.forEach((k, i) => { cache[k] = vals[i]; });
+        } catch (e) { console.warn('IndexedDB unavailable, using localStorage', e); db = null; }
+        // Move books saved by earlier versions out of localStorage
+        Object.keys(localStorage).filter(k => k.startsWith('wcerp.co.')).forEach(k => {
+            const id = k.slice(9);
+            if (!cache[id]) { cache[id] = localStorage.getItem(k); dirty.add(id); }
+            if (db) localStorage.removeItem(k);
+        });
+        await flush();
+    }
+    async function flush() {
+        clearTimeout(timer); timer = null;
+        if (!dirty.size) return;
+        const ids = [...dirty]; dirty.clear();
+        if (!db) { ids.forEach(id => cache[id] == null ? localStorage.removeItem(coKey(id)) : safeSet(coKey(id), cache[id])); return; }
+        try {
+            const tx = db.transaction('co', 'readwrite'), os = tx.objectStore('co');
+            ids.forEach(id => cache[id] == null ? os.delete(id) : os.put(cache[id], id));
+            await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = () => rej(tx.error); tx.onabort = () => rej(tx.error); });
+        } catch (e) {
+            console.error(e); ids.forEach(id => dirty.add(id));
+            const bar = document.getElementById('saveWarn'); if (bar) bar.hidden = false;
+        }
+    }
+    return {
+        init, flush,
+        get: id => cache[id] ?? (db ? null : localStorage.getItem(coKey(id))),
+        put(id, text) { cache[id] = text; dirty.add(id); if (!timer) timer = setTimeout(flush, 250); },
+        del(id) { cache[id] = null; dirty.add(id); flush(); },
+        ids: () => Object.keys(cache).filter(k => cache[k] != null),
+        size: () => Object.values(cache).reduce((n, t) => n + (t ? t.length : 0), 0)
+    };
+})();
+addEventListener('pagehide', () => store.flush());
+addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') store.flush(); });
+
+// Bulk mode: imports post hundreds of vouchers; save once at the end instead of after each one.
+let bulkDepth = 0;
+function inBulk(fn) {
+    bulkDepth++;
+    try { return fn(); } finally { bulkDepth--; if (!bulkDepth) saveCo(); }
+}
 function saveCo() {
     if (!co) return;
     ver++;
-    safeSet(coKey(co.id), JSON.stringify(co));
+    if (bulkDepth) return;
+    store.put(co.id, JSON.stringify(co));
     const entry = meta.companies.find(c => c.id === co.id);
     if (entry) { entry.name = co.profile.name; entry.gstin = co.profile.gstin; entry.updated = new Date().toISOString(); saveMeta(); }
 }
 function loadCo(id) {
-    try { return JSON.parse(localStorage.getItem(coKey(id)) || 'null'); } catch (e) { return null; }
+    try { return JSON.parse(store.get(id) || 'null'); } catch (e) { return null; }
 }
 function openCompany(id) {
     const data = loadCo(id);
@@ -152,7 +211,8 @@ function newCompanyData(profile) {
     return c;
 }
 function upgradeCo(c) {
-    ['accounts', 'contacts', 'items', 'vouchers', 'bankLines', 'gstr2b', 'filings', 'rules', 'audit'].forEach(k => { c[k] ||= []; });
+    ['accounts', 'contacts', 'items', 'vouchers', 'bankLines', 'gstr2b', 'filings', 'rules', 'audit', 'employees'].forEach(k => { c[k] ||= []; });
+    c.payroll ||= {}; c.links ||= {};
     c.series ||= {};
     c.vouchers.forEach(v => { if (v.tdsMonth && !v.taxMonth) { v.taxMonth = v.tdsMonth; delete v.tdsMonth; } });
     c.settings ||= { lockDate: '', prefixes: {} };
@@ -230,6 +290,7 @@ function supplyKind(v) {
 }
 function computeVoucher(v) {
     if (!ITEM_TYPES.includes(v.type)) {
+        if (v.type === 'SJ') { v.totals = { total: 0 }; return v; }
         if (v.type === 'JV') v.totals = { total: sum(v.jlines || [], 'dr') };
         else v.totals = { total: r2(v.amount) + r2(v.tds?.amount || 0) };
         return v;
@@ -410,37 +471,55 @@ function openBills(partyId, type, excludeVid) {
 }
 const dueDate = v => addDays(v.date, Number(contactById(v.partyId)?.creditDays) || 0);
 
-// ---------- stock (weighted average cost) ----------
+// ---------- stock (moving weighted average cost, AS 2) ----------
+// Events are applied in date order. Purchases set the average; sales and consumption take stock out at the average;
+// a production entry (SJ) moves the cost of what was consumed into what was produced.
+const stockCache = new Map();
 function stockAt(date) {
+    const key = `${ver}|${co.id}|${date}`;
+    if (stockCache.has(key)) return stockCache.get(key);
+    if (stockCache.size > 60) stockCache.clear();
     const res = {};
     co.items.filter(i => i.type === 'goods' && i.trackStock !== false).forEach(i => {
-        res[i.id] = { qty: Number(i.openQty) || 0, inQty: Number(i.openQty) || 0, inVal: Number(i.openValue) || 0 };
+        const q = Number(i.openQty) || 0, val = Number(i.openValue) || 0;
+        res[i.id] = { qty: q, val, avg: q > 0 ? val / q : 0, kind: i.kind || 'trading' };
     });
-    co.vouchers.forEach(v => {
-        if (v.status === 'cancelled' || !ITEM_TYPES.includes(v.type) || v.date > date) return;
-        (v.lines || []).forEach(l => {
-            const r = res[l.itemId];
-            if (!r) return;
-            const q = Number(l.qty) || 0;
-            if (v.type === 'PB') { r.qty += q; r.inQty += q; r.inVal += l.taxable + (v.itc === false ? l.cgst + l.sgst + l.igst : 0); }
-            if (v.type === 'DN') { r.qty -= q; r.inQty -= q; r.inVal -= l.taxable; }
-            if (v.type === 'SI') r.qty -= q;
-            if (v.type === 'CN') r.qty += q;
+    const out = (r, q) => { const a = r.avg; r.qty -= q; r.val = r.qty > 0 ? r.val - q * a : 0; if (r.qty <= 0) r.val = 0; return q * a; };
+    const inn = (r, q, val) => { r.qty += q; r.val += val; r.avg = r.qty > 0 ? r.val / r.qty : r.avg; };
+    co.vouchers.filter(v => v.status !== 'cancelled' && v.date <= date && (ITEM_TYPES.includes(v.type) || v.type === 'SJ'))
+        .sort((a, b) => a.date.localeCompare(b.date) || (a.created || '').localeCompare(b.created || ''))
+        .forEach(v => {
+            if (v.type === 'SJ') {
+                let cost = sum(v.costs || [], c => Number(c.amt) || 0);
+                (v.consume || []).forEach(l => { const r = res[l.itemId]; if (r) cost += out(r, Number(l.qty) || 0); });
+                const outs = (v.produce || []).filter(l => res[l.itemId]);
+                const w = outs.reduce((s2, l) => s2 + (Number(l.qty) || 0) * (Number(l.weight) || 1), 0);
+                outs.forEach(l => inn(res[l.itemId], Number(l.qty) || 0, w ? cost * (Number(l.qty) || 0) * (Number(l.weight) || 1) / w : 0));
+                return;
+            }
+            (v.lines || []).forEach(l => {
+                const r = res[l.itemId];
+                if (!r) return;
+                const q = Number(l.qty) || 0;
+                if (v.type === 'PB') inn(r, q, l.taxable + (v.itc === false ? l.cgst + l.sgst + l.igst : 0));
+                if (v.type === 'DN') { r.qty -= q; r.val = Math.max(0, r.val - l.taxable); r.avg = r.qty > 0 ? r.val / r.qty : r.avg; }
+                if (v.type === 'SI') out(r, q);
+                if (v.type === 'CN') inn(r, q, q * r.avg);
+            });
         });
-    });
     let value = 0;
-    Object.entries(res).forEach(([id, r]) => {
-        r.avg = r.inQty > 0 ? r.inVal / r.inQty : 0;
-        r.value = r2(Math.max(0, r.qty) * r.avg);
-        value += r.value;
-    });
-    return { items: res, value: r2(value) };
+    const byKind = { raw: 0, finished: 0, trading: 0 };
+    Object.values(res).forEach(r => { r.value = r2(Math.max(0, r.val)); value += r.value; byKind[r.kind] = (byKind[r.kind] || 0) + r.value; });
+    const result = { items: res, value: r2(value), byKind };
+    stockCache.set(key, result);
+    return result;
 }
 const openingStockValue = () => sum(co.items.filter(i => i.type === 'goods'), i => Number(i.openValue) || 0);
-function stockValueAt(date) {
-    if (date < co.profile.booksFrom) return openingStockValue();
-    return stockAt(date).value;
+function stockValueAt(date, kind) {
+    if (date < co.profile.booksFrom) return kind ? sum(co.items.filter(i => i.type === 'goods' && (i.kind || 'trading') === kind), i => Number(i.openValue) || 0) : openingStockValue();
+    return kind ? r2(stockAt(date).byKind[kind] || 0) : stockAt(date).value;
 }
+const isManufacturer = () => co.items.some(i => i.kind === 'raw');
 
 // ---------- financial statements (Schedule III, Division I – Accounting Standards) ----------
 function plData(from, to) {
@@ -456,7 +535,13 @@ function plData(from, to) {
     const totalExp = r2(tot(purchases) + changeInv + tot(employee) + tot(finance) + tot(dep) + tot(otherExp));
     const pbt = r2(totalIncome - totalExp);
     const pat = r2(pbt - tot(tax));
-    return { from, to, revenue, other, purchases, employee, finance, dep, otherExp, tax, openStock, closeStock, changeInv, totalIncome, totalExp, pbt, pat, tot };
+    // Manufacturer (raw materials marked as such): Schedule III shows cost of materials consumed separately
+    // from the change in finished goods. The total is the same.
+    const mfg = isManufacturer();
+    const rawOpen = mfg ? stockValueAt(addDays(from, -1), 'raw') : 0, rawClose = mfg ? stockValueAt(to, 'raw') : 0;
+    const materials = r2(tot(purchases) + rawOpen - rawClose);
+    const changeFg = r2(changeInv - (rawOpen - rawClose));
+    return { from, to, revenue, other, purchases, employee, finance, dep, otherExp, tax, openStock, closeStock, changeInv, totalIncome, totalExp, pbt, pat, tot, mfg, rawOpen, rawClose, materials, changeFg };
 }
 const profitBetween = (from, to) => plData(from, to).pat;
 
@@ -620,6 +705,11 @@ function validateVoucher(v, old) {
         if (!a || !b || !['bank', 'cash'].includes(a.group) || !['bank', 'cash'].includes(b.group)) E.push('Contra moves money between cash and bank accounts only.');
         if (v.accountId === v.toId) E.push('From and To must be different.');
         if (!(Number(v.amount) > 0)) E.push('Amount must be more than zero.');
+    } else if (v.type === 'SJ') {
+        const goods = id => { const it = itemById(id); return it && it.type === 'goods' && it.trackStock !== false; };
+        if (!(v.produce || []).some(l => goods(l.itemId) && Number(l.qty) > 0)) E.push('Add at least one item produced.');
+        if (!(v.consume || []).some(l => goods(l.itemId) && Number(l.qty) > 0)) E.push('Add at least one material consumed.');
+        [...(v.consume || []), ...(v.produce || [])].forEach(l => { if (!goods(l.itemId)) E.push('Production can only use stock items.'); if (!(Number(l.qty) > 0)) E.push('Quantities must be more than zero.'); });
     } else if (v.type === 'JV') {
         const L = (v.jlines || []).filter(l => l.acc && (Number(l.dr) || Number(l.cr)));
         if (L.length < 2) E.push('A journal needs at least two lines.');
@@ -691,12 +781,21 @@ function saveVoucher(input, opts = {}) {
     computeVoucher(v);
     const errors = validateVoucher(v, old);
     if (errors.length) { const e = new Error(errors.join('\n')); e.list = errors; throw e; }
-    if (!old) {
+    if (!old && v.ext && co.vouchers.some(x => x.ext === v.ext)) throw new Error(`Already imported (${v.ext}).`);
+    if (!old && opts.keepNo) {
+        // A document issued elsewhere (an Eco Pack invoice, a scanned sales invoice) keeps its own number
+        const no = String(input.no || '').trim();
+        if (!/^[A-Za-z0-9/-]{1,16}$/.test(no)) throw new Error('The document number must be 1–16 letters, digits, / or -.');
+        if (co.vouchers.some(x => x.type === v.type && x.no === no && fyOf(x.date) === fyOf(v.date))) throw new Error(`${VTYPES[v.type].name} ${no} already exists.`);
+        v.id = uid('v'); v.no = no; v.status = 'active'; v.created = opts.created || new Date().toISOString(); v.createdBy = me?.name || 'System';
+        co.vouchers.push(v);
+        audit(`${VTYPES[v.type].name} recorded`, { entity: 'Voucher', ref: v.no, after: summarize(v), reason: opts.source || '' });
+    } else if (!old) {
         const nx = nextNumber(v.type, v.date);
         v.id = uid('v');
         v.no = nx.no;
         v.status = 'active';
-        v.created = new Date().toISOString();
+        v.created = opts.created || new Date().toISOString();
         v.createdBy = me?.name || 'System';
         co.series[nx.key] = nx.n;
         co.vouchers.push(v);
