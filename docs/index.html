@@ -6156,7 +6156,7 @@ function gstLookupSettingsHtml() {
         <div class="fg"><label class="f">Service address<input id="gl_url" value="${esc(c.url || '')}" placeholder="https://provider.example/search?gstin={gstin}&key={key}"></label>
         <label class="f">Key goes in header <span class="hint">leave blank if in the address</span><input id="gl_header" value="${esc(c.header || '')}" placeholder="e.g. x-api-key"></label>
         <label class="f">API key<input id="gl_key" type="password" value="${esc(c.key || '')}"></label></div>
-        ${isAdmin() ? `<div class="row" style="margin-top:10px"><button class="btn btn-p btn-sm" onclick="saveGstLookup()">Save</button>${gstLookupReady() ? '<span class="badge good">Lookup on</span>' : '<span class="badge">Not set — names are suggested from the GSTIN and business name only</span>'}</div>` : ''}</div>`;
+        ${isAdmin() ? `<div class="row" style="margin-top:10px"><button class="btn btn-p btn-sm" onclick="saveGstLookup()">Save</button>${gstLookupReady() ? '<span class="badge good">Lookup on</span>' : '<span class="note">Not set: GSTINs are decoded and the business is suggested from its name.</span>'}</div>` : ''}</div>`;
 }
 function saveGstLookup() {
     const url = $('#gl_url').value.trim();
