@@ -164,7 +164,7 @@ const lakh = x => x >= 10000000 ? `₹${+(x / 10000000).toFixed(2)} crore` : `�
 
 function bizDefaults() {
     const p = co.profile, b = p.biz || {};
-    return { industry: '', turnoverLast: p.aato || 0, turnoverExp: 0, interstate: false, ecommerce: false, exports: false, employees: (co.employees || []).filter(e => e.status !== 'Inactive').length, cashPct: 10, paidUp: 0, netWorth: 0, netProfit: 0, borrowings: 0, investment: 0, maxTariff: 3000, gtaOption: 'rcm', b2bShare: 50, scheme: p.gstType || 'regular', freq: p.gstFreq || 'monthly', ...b };
+    return { industry: p.bizGuess?.industry || '', turnoverLast: p.aato || 0, turnoverExp: 0, interstate: false, ecommerce: false, exports: false, employees: (co.employees || []).filter(e => e.status !== 'Inactive').length, cashPct: 10, paidUp: 0, netWorth: 0, netProfit: 0, borrowings: 0, investment: 0, maxTariff: 3000, gtaOption: 'rcm', b2bShare: 50, scheme: p.bizGuess?.composition ? 'composition' : (p.gstType || 'regular'), freq: p.gstFreq || 'monthly', ...b };
 }
 
 // ---------- the rules engine ----------
@@ -349,6 +349,7 @@ function viewBusiness() {
     const cards = Object.entries(INDUSTRIES).map(([k, x]) => `<button type="button" class="ind ${b.industry === k ? 'on' : ''}" onclick="bizSet('industry','${k}')"><span>${x.icon}</span>${esc(x.name)}</button>`).join('');
     $('#view').innerHTML = pageHead('Business profile', 'Tell the ERP what your business does and how big it is. It works out the GST rates, input credit, returns, income-tax, company-law and labour rules that apply, and sets up your books for them.')
         + (p.biz ? `<div class="card" style="border-left:4px solid var(--good)"><b>Applied on ${fmtDate(p.biz.appliedOn)}:</b> ${esc(INDUSTRIES[p.biz.industry]?.name || '')} · ${p.gstType === 'composition' ? `composition ${p.compRate}%` : 'regular GST'} · input credit: ${{ full: 'claimed', none: 'not claimed (no-credit supplies)', mixed: 'claimed with Rule 42 reversal' }[p.itcPolicy || 'full']}. Change anything below and apply again.</div>` : '')
+        + (!p.biz && p.bizGuess && b.industry === p.bizGuess.industry ? `<div class="card" style="border-left:4px solid var(--brand)"><b>Suggested: ${esc(INDUSTRIES[p.bizGuess.industry]?.name || '')}</b> — worked out from ${esc(p.bizGuess.why)}. Change it below if that is not right, then check the size questions and apply.</div>` : '')
         + `<div class="card"><h2>1. What does the business do?</h2><div class="inds">${cards}</div></div>
         <div class="card" id="bizQ"></div><div id="bizOut"></div>`;
     drawBizQ(); drawBizOut();

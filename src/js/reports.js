@@ -618,6 +618,7 @@ function viewSettings(tab) {
             ${fld('aato', 'Last year turnover (₹)', 'Above ₹5 crore: e-invoicing; ₹10 crore+: 30-day reporting limit', 'number')}
             ${fld('lutNo', 'LUT reference (ARN)', 'For exports / SEZ without IGST')}${fld('lutTill', 'LUT valid till', '', 'date')}
             </div><p class="note" style="margin-top:10px">${p.gstType === 'composition' ? `Composition at ${p.compRate || 1}%: sales print as "Bill of Supply" with no GST, and purchases carry no input credit. File CMP-08 quarterly and GSTR-4 yearly.` : `Regular: tax invoices with GST; input credit ${{ full: 'on eligible purchases', none: 'not claimed (your supplies are without credit)', mixed: 'claimed with Rule 42 reversal of common credit' }[p.itcPolicy || 'full']}.`} The <a href="#/business">Business profile</a> works these out from your industry and size.</p></div>
+            ${gstLookupSettingsHtml()}
             <div class="card"><h2>TDS / TCS (deductor details for returns)</h2><div class="fg">
             ${fld('tan', 'TAN', 'e.g. CHEA12345B', 'text', 'maxlength="10" style="text-transform:uppercase"')}
             ${sel('deductorType', 'Type of deductor', [['company', 'Company'], ['firm', 'Firm / LLP'], ['individual', 'Individual / HUF (audited)'], ['aop', 'AOP / BOI / Trust'], ['govt', 'Government']])}

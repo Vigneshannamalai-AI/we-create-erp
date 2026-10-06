@@ -538,10 +538,10 @@ function companyForm(existing) {
     modal({
         title: existing ? 'Company details' : 'New company', wide: true,
         body: `<div id="cfErr"></div><div class="fg">
+            <label class="f wide">GSTIN <span class="hint">Enter it first — state, PAN and type of entity fill in${gstLookupReady() ? '; name and address are fetched' : ''}</span><span class="row" style="gap:8px;flex-wrap:nowrap"><input id="cf_gstin" maxlength="15" style="text-transform:uppercase;flex:1;min-width:0" value="${esc(p.gstin)}" placeholder="e.g. 33AABCK4521M1ZN">${gstLookupReady() ? '<button type="button" class="btn btn-s btn-sm" id="cf_fetch">Fetch details</button>' : ''}</span><span class="hint" id="cf_gHint"></span></label>
             <label class="f">Trade name *<input id="cf_name" value="${esc(p.name)}"></label>
             <label class="f">Legal name (as per PAN)<input id="cf_legal" value="${esc(p.legalName)}"></label>
             <label class="f">Type of entity<select id="cf_entity">${['Proprietorship', 'Partnership', 'LLP', 'Private Ltd', 'Public Ltd', 'Trust / Society', 'HUF'].map(x => opt(x, x, p.entity)).join('')}</select></label>
-            <label class="f">GSTIN <span class="hint">State and PAN fill in from it</span><input id="cf_gstin" maxlength="15" style="text-transform:uppercase" value="${esc(p.gstin)}"></label>
             <label class="f">PAN<input id="cf_pan" maxlength="10" style="text-transform:uppercase" value="${esc(p.pan)}"></label>
             <label class="f">TAN <span class="hint">Needed if you deduct TDS</span><input id="cf_tan" maxlength="10" style="text-transform:uppercase" value="${esc(p.tan)}"></label>
             <label class="f">State *<select id="cf_state">${stateOptions(p.state)}</select></label>
@@ -561,7 +561,19 @@ function companyForm(existing) {
         </div>`,
         foot: `<button class="btn btn-s" onclick="closeModal()">Cancel</button><button class="btn btn-p" id="cfOk">${existing ? 'Save' : 'Create company'}</button>`,
         onOpen: () => {
-            $('#cf_gstin').oninput = e => { const g = e.target.value.toUpperCase(); if (gstinValid(g)) { $('#cf_state').value = g.slice(0, 2); $('#cf_pan').value = g.slice(2, 12); } };
+            let rec = null;   // what the GST lookup service returned, if any
+            const hint = () => { $('#cf_gHint').innerHTML = gstinHintHtml($('#cf_gstin').value.toUpperCase(), $('#cf_name').value || $('#cf_legal').value); };
+            $('#cf_gstin').oninput = e => {
+                const d = decodeGstin(e.target.value);
+                if (d) {
+                    $('#cf_state').value = d.state; $('#cf_pan').value = d.pan;
+                    // Type of entity from the PAN (a company could be private or public: keep a company choice the user made)
+                    if (d.entity && !(d.entity === 'Private Ltd' && $('#cf_entity').value === 'Public Ltd') && !(d.entity === 'Partnership' && $('#cf_entity').value === 'LLP')) $('#cf_entity').value = d.entity;
+                }
+                hint();
+            };
+            $('#cf_name').oninput = hint; $('#cf_legal').oninput = hint; hint();
+            if ($('#cf_fetch')) $('#cf_fetch').onclick = () => fetchGstinInto('#cf_gstin', { tradeName: '#cf_name', legalName: '#cf_legal', address: '#cf_addr', city: '#cf_city', pincode: '#cf_pin' }, r => { rec = r; if (r.entity) $('#cf_entity').value = r.entity; hint(); });
             $('#cfOk').onclick = () => {
                 const np = { name: val('cf_name'), legalName: val('cf_legal'), entity: val('cf_entity'), gstin: val('cf_gstin').toUpperCase(), pan: val('cf_pan').toUpperCase(), tan: val('cf_tan').toUpperCase(), state: val('cf_state'), address: val('cf_addr'), city: val('cf_city'), pincode: val('cf_pin'), phone: val('cf_phone'), email: val('cf_email'), booksFrom: val('cf_from'), aato: numv('cf_aato'), bankName: val('cf_bank'), bankAcc: val('cf_bacc'), bankIfsc: val('cf_ifsc').toUpperCase(), terms: val('cf_terms'), lut: chk('cf_lut'), roundOff: chk('cf_round') };
                 const E = [];
@@ -574,6 +586,9 @@ function companyForm(existing) {
                 if (np.bankIfsc && !/^[A-Z]{4}0[A-Z0-9]{6}$/.test(np.bankIfsc)) E.push('IFSC must look like HDFC0001234.');
                 if (!np.booksFrom) E.push('Books start date is required.');
                 if (E.length) { const er = new Error(); er.list = E; return showErr('#cfErr', er); }
+                // What the business probably does: from the GST record's business activities, else from the name
+                const guess = guessIndustry({ name: `${np.name} ${np.legalName}`, nba: rec?.nba || [], type: rec?.type || '' });
+                if (guess && !(existing && co.profile.biz)) np.bizGuess = guess;
                 if (existing) {
                     audit('Company details changed', { entity: 'Company', ref: np.name, after: diffFields(co.profile, np, Object.keys(np)) });
                     Object.assign(co.profile, np);
@@ -690,7 +705,7 @@ function contactForm(type, id, prefill, after) {
         </div>`,
         foot: `<button class="btn btn-s" onclick="closeModal()">Cancel</button><button class="btn btn-p" id="ctOk">Save</button>`,
         onOpen: () => {
-            const g = () => { const v = $('#ct_gstin').value.toUpperCase(); $('#ct_gHint').textContent = !v ? '' : gstinValid(v) ? `✓ Valid · ${STATES[v.slice(0, 2)]}` : 'Not a valid GSTIN yet'; if (gstinValid(v)) { $('#ct_state').value = v.slice(0, 2); $('#ct_pan').value = v.slice(2, 12); } };
+            const g = () => { const v = $('#ct_gstin').value.toUpperCase(); $('#ct_gHint').innerHTML = gstinHintHtml(v, $('#ct_name').value) + (gstinValid(v) && gstLookupReady() ? ' <button type="button" class="link-btn" onclick="fetchGstinInto(\'#ct_gstin\', { tradeName: \'#ct_name\', address: \'#ct_addr\', city: \'#ct_city\', pincode: \'#ct_pin\' })">Fetch name & address</button>' : ''); if (gstinValid(v)) { $('#ct_state').value = v.slice(0, 2); $('#ct_pan').value = v.slice(2, 12); } };
             $('#ct_gstin').oninput = g; g();
             $('#ctOk').onclick = () => {
                 const amt = numv('ct_open');

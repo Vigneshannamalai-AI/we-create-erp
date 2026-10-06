@@ -344,6 +344,42 @@ Grand Total                                     14,632.00`;
         return (!bad.length && verifyChain(co.audit).ok) || bad.map(v => v.no).join(',');
     });
 
+    // ---------- reading a GSTIN ----------
+    check('GSTIN decoded offline: state, PAN, type of entity, registration number', () => {
+        const d = decodeGstin(makeGstin('33', 'AABCK4521M')), f = decodeGstin(makeGstin('29', 'AAKFS2210L', '2')), p = decodeGstin(makeGstin('33', 'AKXPS4821L'));
+        return (d.state === '33' && d.pan === 'AABCK4521M' && d.entity === 'Private Ltd' && d.regNo === 1 && f.entity === 'Partnership' && f.regNo === 2 && f.stateName === STATES['29'] && p.entity === 'Proprietorship' && decodeGstin('33AABCK4521M1ZX') === null) || JSON.stringify([d, f, p]);
+    });
+    check('Nature of business suggested from the name or the GST activities', () => {
+        const g = x => guessIndustry(x)?.industry;
+        const r = [g({ name: 'STAY BAY Business Hotels' }), g({ name: 'Sri Murugan Sweets' }), g({ name: 'Eco Pack Private Limited', nba: ['Factory / Manufacturing'] }), g({ name: 'Kaveri Electricals' }), g({ name: 'Ram & Sons', nba: ['Wholesale Business', 'Retail Business'] }), g({ name: 'XYZ', nba: ['Supplier of Services'] }), g({ name: 'Zenith' })];
+        return JSON.stringify(r) === JSON.stringify(['hotel', 'restaurant', 'manufacturer', 'trader', 'trader', 'professional', undefined]) || JSON.stringify(r);
+    });
+    check('GST lookup record read (name, address, constitution, activities, composition)', () => {
+        const rec = { taxpayerInfo: { lgnm: 'RAVI KUMAR', tradeNam: 'GREEN LEAF RESTAURANT', sts: 'Active', ctb: 'Proprietorship', dty: 'Composition', nba: ['Retail Business'], rgdt: '01/07/2017', pradr: { addr: { bno: '12', st: 'Anna Salai', loc: 'Teynampet', dst: 'Chennai', stcd: 'Tamil Nadu', pncd: '600018' } } } };
+        const r = parseGstRecord(rec), gi = guessIndustry({ name: r.tradeName, nba: r.nba, type: r.type });
+        return (r.legalName === 'RAVI KUMAR' && r.entity === 'Proprietorship' && r.address === '12, Anna Salai, Teynampet' && r.city === 'Chennai' && r.pincode === '600018' && gi.industry === 'restaurant' && gi.composition && parseGstRecord({ error: 'x' }) === null) || JSON.stringify({ r, gi });
+    });
+    await (async () => {
+        const f0 = window.fetch, cfg0 = meta.gstLookup;
+        try {
+            let asked = '';
+            window.fetch = async (url, o) => { asked = `${url}|${o.headers['x-api-key']}`; return { ok: true, json: async () => ({ data: { lgnm: 'ECO PACK PRIVATE LIMITED', tradeNam: 'ECO PACK', ctb: 'Private Limited Company', nba: ['Factory / Manufacturing'], sts: 'Active', pradr: { addr: { bnm: 'Arcot Road', loc: 'Porur', dst: 'Chennai', pncd: '600116' } } } }) }; };
+            meta.gstLookup = {};
+            let blocked = false; try { await fetchGstin('33AAACE1734G1Z6'); } catch (e) { blocked = /Settings/.test(e.message); }
+            meta.gstLookup = { url: 'https://gst.example/search?gstin={gstin}', header: 'x-api-key', key: 'K1' };
+            const r = await fetchGstin(makeGstin('33', 'AAACE1734G'));
+            results.push({ name: 'GST lookup service: needs set-up, then fetches and reads the record', ok: blocked && asked.includes('gstin=33AAACE1734G') && asked.endsWith('|K1') && r.entity === 'Private Ltd' && r.city === 'Chennai' && guessIndustry({ name: r.tradeName, nba: r.nba }).industry === 'manufacturer', note: asked });
+        } catch (e) { results.push({ name: 'GST lookup service', ok: false, note: e.message }); }
+        finally { window.fetch = f0; meta.gstLookup = cfg0; }
+    })();
+    check('Business profile starts from the suggestion made at company creation', () => {
+        const saved = co.profile.bizGuess, b0 = co.profile.biz;
+        co.profile.bizGuess = { industry: 'hotel', why: 'test', composition: false }; delete co.profile.biz;
+        const d = bizDefaults();
+        co.profile.bizGuess = saved; co.profile.biz = b0;
+        return d.industry === 'hotel' || d.industry;
+    });
+
     // ---------- business profile: the ERP adapts rates, credit and returns to the business ----------
     const B = (x) => ({ ...bizDefaults(), turnoverLast: 0, turnoverExp: 0, employees: 0, cashPct: 10, ...x });
     const has = (R, re, level) => R.some(r => re.test(r.title) && (!level || r.level === level));

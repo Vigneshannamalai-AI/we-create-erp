@@ -390,6 +390,7 @@ select{max-width:100%}
 .rules li:first-child{border-top:0}
 .rules .note{margin-top:2px}
 @media (max-width:700px){.inds{grid-template-columns:1fr 1fr}.ind{font-size:12px;padding:8px}}
+.link-btn{border:0;background:none;padding:0;font:inherit;color:var(--brand);text-decoration:underline;cursor:pointer}
 
 </style>
 </head>
@@ -2537,6 +2538,7 @@ const MANUAL = [
         <div class="man-tip"><b>Basic or Advanced:</b> the switch at the top right. Basic hides journals, notes, TDS, bank reconciliation and bill scanning, for people who only raise invoices and record money. Nothing is lost when you switch.</div>
         <div class="man-tip"><b>Trial:</b> a new workspace gets every Professional feature free for 14 days. After that it moves to the plan you choose, or to Starter (free).</div>`],
     ['business', 'Business profile — rates and rules for your industry', `
+        <p><b>Start with the GSTIN.</b> Typing it in the company form fills the state, the PAN and the type of entity (the PAN's 4th letter: C company, F firm / LLP, P individual / proprietor, H HUF, T / A trust or AOP…) and shows the registration number under that PAN. The legal and trade name, address and nature of business are held by GSTN; with a GST lookup service set in Settings → GST & TDS, <b>Fetch details</b> fills them too. The ERP then suggests what the business does — from the GST record's business activities (factory, wholesale, retail, services…) or from the name (Hotels, Sweets, Textiles, Traders…) — and the Business profile opens with it chosen. Customers and vendors get the same GSTIN check.</p>
         <p>Every new company starts with <b>Business profile</b>. Choose what the business does (hotel, restaurant, trader, manufacturer, professional, clinic, school, transport, construction, salon / gym, tour operator, online seller, garments, jeweller, rentals…) and answer a few questions on size: turnover, employees, cash sales, inter-state or online sales, and for companies the paid-up capital and net worth.</p>
         <p>The ERP then shows <b>your GST rates</b> (with HSN / SAC and whether input credit is allowed) and <b>the rules that apply to you</b>, marked Must, Option, Benefit or Info: GST registration, composition scheme, return frequency, GSTR-9 / 9C, e-invoicing, presumptive tax, tax audit, TDS duty, the 45-day MSME payment rule, small-company exemptions, CARO, CSR, PF, ESI, gratuity, bonus and Udyam.</p>
         <p><b>Apply to my books</b> sets it up: the rate items are added, the GST scheme and return frequency are set, and the input-credit rule is applied to every new purchase:</p>
@@ -3900,10 +3902,10 @@ function companyForm(existing) {
     modal({
         title: existing ? 'Company details' : 'New company', wide: true,
         body: `<div id="cfErr"></div><div class="fg">
+            <label class="f wide">GSTIN <span class="hint">Enter it first — state, PAN and type of entity fill in${gstLookupReady() ? '; name and address are fetched' : ''}</span><span class="row" style="gap:8px;flex-wrap:nowrap"><input id="cf_gstin" maxlength="15" style="text-transform:uppercase;flex:1;min-width:0" value="${esc(p.gstin)}" placeholder="e.g. 33AABCK4521M1ZN">${gstLookupReady() ? '<button type="button" class="btn btn-s btn-sm" id="cf_fetch">Fetch details</button>' : ''}</span><span class="hint" id="cf_gHint"></span></label>
             <label class="f">Trade name *<input id="cf_name" value="${esc(p.name)}"></label>
             <label class="f">Legal name (as per PAN)<input id="cf_legal" value="${esc(p.legalName)}"></label>
             <label class="f">Type of entity<select id="cf_entity">${['Proprietorship', 'Partnership', 'LLP', 'Private Ltd', 'Public Ltd', 'Trust / Society', 'HUF'].map(x => opt(x, x, p.entity)).join('')}</select></label>
-            <label class="f">GSTIN <span class="hint">State and PAN fill in from it</span><input id="cf_gstin" maxlength="15" style="text-transform:uppercase" value="${esc(p.gstin)}"></label>
             <label class="f">PAN<input id="cf_pan" maxlength="10" style="text-transform:uppercase" value="${esc(p.pan)}"></label>
             <label class="f">TAN <span class="hint">Needed if you deduct TDS</span><input id="cf_tan" maxlength="10" style="text-transform:uppercase" value="${esc(p.tan)}"></label>
             <label class="f">State *<select id="cf_state">${stateOptions(p.state)}</select></label>
@@ -3923,7 +3925,19 @@ function companyForm(existing) {
         </div>`,
         foot: `<button class="btn btn-s" onclick="closeModal()">Cancel</button><button class="btn btn-p" id="cfOk">${existing ? 'Save' : 'Create company'}</button>`,
         onOpen: () => {
-            $('#cf_gstin').oninput = e => { const g = e.target.value.toUpperCase(); if (gstinValid(g)) { $('#cf_state').value = g.slice(0, 2); $('#cf_pan').value = g.slice(2, 12); } };
+            let rec = null;   // what the GST lookup service returned, if any
+            const hint = () => { $('#cf_gHint').innerHTML = gstinHintHtml($('#cf_gstin').value.toUpperCase(), $('#cf_name').value || $('#cf_legal').value); };
+            $('#cf_gstin').oninput = e => {
+                const d = decodeGstin(e.target.value);
+                if (d) {
+                    $('#cf_state').value = d.state; $('#cf_pan').value = d.pan;
+                    // Type of entity from the PAN (a company could be private or public: keep a company choice the user made)
+                    if (d.entity && !(d.entity === 'Private Ltd' && $('#cf_entity').value === 'Public Ltd') && !(d.entity === 'Partnership' && $('#cf_entity').value === 'LLP')) $('#cf_entity').value = d.entity;
+                }
+                hint();
+            };
+            $('#cf_name').oninput = hint; $('#cf_legal').oninput = hint; hint();
+            if ($('#cf_fetch')) $('#cf_fetch').onclick = () => fetchGstinInto('#cf_gstin', { tradeName: '#cf_name', legalName: '#cf_legal', address: '#cf_addr', city: '#cf_city', pincode: '#cf_pin' }, r => { rec = r; if (r.entity) $('#cf_entity').value = r.entity; hint(); });
             $('#cfOk').onclick = () => {
                 const np = { name: val('cf_name'), legalName: val('cf_legal'), entity: val('cf_entity'), gstin: val('cf_gstin').toUpperCase(), pan: val('cf_pan').toUpperCase(), tan: val('cf_tan').toUpperCase(), state: val('cf_state'), address: val('cf_addr'), city: val('cf_city'), pincode: val('cf_pin'), phone: val('cf_phone'), email: val('cf_email'), booksFrom: val('cf_from'), aato: numv('cf_aato'), bankName: val('cf_bank'), bankAcc: val('cf_bacc'), bankIfsc: val('cf_ifsc').toUpperCase(), terms: val('cf_terms'), lut: chk('cf_lut'), roundOff: chk('cf_round') };
                 const E = [];
@@ -3936,6 +3950,9 @@ function companyForm(existing) {
                 if (np.bankIfsc && !/^[A-Z]{4}0[A-Z0-9]{6}$/.test(np.bankIfsc)) E.push('IFSC must look like HDFC0001234.');
                 if (!np.booksFrom) E.push('Books start date is required.');
                 if (E.length) { const er = new Error(); er.list = E; return showErr('#cfErr', er); }
+                // What the business probably does: from the GST record's business activities, else from the name
+                const guess = guessIndustry({ name: `${np.name} ${np.legalName}`, nba: rec?.nba || [], type: rec?.type || '' });
+                if (guess && !(existing && co.profile.biz)) np.bizGuess = guess;
                 if (existing) {
                     audit('Company details changed', { entity: 'Company', ref: np.name, after: diffFields(co.profile, np, Object.keys(np)) });
                     Object.assign(co.profile, np);
@@ -4052,7 +4069,7 @@ function contactForm(type, id, prefill, after) {
         </div>`,
         foot: `<button class="btn btn-s" onclick="closeModal()">Cancel</button><button class="btn btn-p" id="ctOk">Save</button>`,
         onOpen: () => {
-            const g = () => { const v = $('#ct_gstin').value.toUpperCase(); $('#ct_gHint').textContent = !v ? '' : gstinValid(v) ? `✓ Valid · ${STATES[v.slice(0, 2)]}` : 'Not a valid GSTIN yet'; if (gstinValid(v)) { $('#ct_state').value = v.slice(0, 2); $('#ct_pan').value = v.slice(2, 12); } };
+            const g = () => { const v = $('#ct_gstin').value.toUpperCase(); $('#ct_gHint').innerHTML = gstinHintHtml(v, $('#ct_name').value) + (gstinValid(v) && gstLookupReady() ? ' <button type="button" class="link-btn" onclick="fetchGstinInto(\'#ct_gstin\', { tradeName: \'#ct_name\', address: \'#ct_addr\', city: \'#ct_city\', pincode: \'#ct_pin\' })">Fetch name & address</button>' : ''); if (gstinValid(v)) { $('#ct_state').value = v.slice(0, 2); $('#ct_pan').value = v.slice(2, 12); } };
             $('#ct_gstin').oninput = g; g();
             $('#ctOk').onclick = () => {
                 const amt = numv('ct_open');
@@ -5409,6 +5426,7 @@ function viewSettings(tab) {
             ${fld('aato', 'Last year turnover (₹)', 'Above ₹5 crore: e-invoicing; ₹10 crore+: 30-day reporting limit', 'number')}
             ${fld('lutNo', 'LUT reference (ARN)', 'For exports / SEZ without IGST')}${fld('lutTill', 'LUT valid till', '', 'date')}
             </div><p class="note" style="margin-top:10px">${p.gstType === 'composition' ? `Composition at ${p.compRate || 1}%: sales print as "Bill of Supply" with no GST, and purchases carry no input credit. File CMP-08 quarterly and GSTR-4 yearly.` : `Regular: tax invoices with GST; input credit ${{ full: 'on eligible purchases', none: 'not claimed (your supplies are without credit)', mixed: 'claimed with Rule 42 reversal of common credit' }[p.itcPolicy || 'full']}.`} The <a href="#/business">Business profile</a> works these out from your industry and size.</p></div>
+            ${gstLookupSettingsHtml()}
             <div class="card"><h2>TDS / TCS (deductor details for returns)</h2><div class="fg">
             ${fld('tan', 'TAN', 'e.g. CHEA12345B', 'text', 'maxlength="10" style="text-transform:uppercase"')}
             ${sel('deductorType', 'Type of deductor', [['company', 'Company'], ['firm', 'Firm / LLP'], ['individual', 'Individual / HUF (audited)'], ['aop', 'AOP / BOI / Trust'], ['govt', 'Government']])}
@@ -5801,7 +5819,7 @@ const lakh = x => x >= 10000000 ? `₹${+(x / 10000000).toFixed(2)} crore` : `�
 
 function bizDefaults() {
     const p = co.profile, b = p.biz || {};
-    return { industry: '', turnoverLast: p.aato || 0, turnoverExp: 0, interstate: false, ecommerce: false, exports: false, employees: (co.employees || []).filter(e => e.status !== 'Inactive').length, cashPct: 10, paidUp: 0, netWorth: 0, netProfit: 0, borrowings: 0, investment: 0, maxTariff: 3000, gtaOption: 'rcm', b2bShare: 50, scheme: p.gstType || 'regular', freq: p.gstFreq || 'monthly', ...b };
+    return { industry: p.bizGuess?.industry || '', turnoverLast: p.aato || 0, turnoverExp: 0, interstate: false, ecommerce: false, exports: false, employees: (co.employees || []).filter(e => e.status !== 'Inactive').length, cashPct: 10, paidUp: 0, netWorth: 0, netProfit: 0, borrowings: 0, investment: 0, maxTariff: 3000, gtaOption: 'rcm', b2bShare: 50, scheme: p.bizGuess?.composition ? 'composition' : (p.gstType || 'regular'), freq: p.gstFreq || 'monthly', ...b };
 }
 
 // ---------- the rules engine ----------
@@ -5986,6 +6004,7 @@ function viewBusiness() {
     const cards = Object.entries(INDUSTRIES).map(([k, x]) => `<button type="button" class="ind ${b.industry === k ? 'on' : ''}" onclick="bizSet('industry','${k}')"><span>${x.icon}</span>${esc(x.name)}</button>`).join('');
     $('#view').innerHTML = pageHead('Business profile', 'Tell the ERP what your business does and how big it is. It works out the GST rates, input credit, returns, income-tax, company-law and labour rules that apply, and sets up your books for them.')
         + (p.biz ? `<div class="card" style="border-left:4px solid var(--good)"><b>Applied on ${fmtDate(p.biz.appliedOn)}:</b> ${esc(INDUSTRIES[p.biz.industry]?.name || '')} · ${p.gstType === 'composition' ? `composition ${p.compRate}%` : 'regular GST'} · input credit: ${{ full: 'claimed', none: 'not claimed (no-credit supplies)', mixed: 'claimed with Rule 42 reversal' }[p.itcPolicy || 'full']}. Change anything below and apply again.</div>` : '')
+        + (!p.biz && p.bizGuess && b.industry === p.bizGuess.industry ? `<div class="card" style="border-left:4px solid var(--brand)"><b>Suggested: ${esc(INDUSTRIES[p.bizGuess.industry]?.name || '')}</b> — worked out from ${esc(p.bizGuess.why)}. Change it below if that is not right, then check the size questions and apply.</div>` : '')
         + `<div class="card"><h2>1. What does the business do?</h2><div class="inds">${cards}</div></div>
         <div class="card" id="bizQ"></div><div id="bizOut"></div>`;
     drawBizQ(); drawBizOut();
@@ -6032,6 +6051,130 @@ function doApplyBiz() {
         bizDraft = null;
         toast(`Applied: ${r.scheme === 'composition' ? 'composition scheme' : 'regular GST'}, input credit ${r.policy}${r.added.length ? `, ${r.added.length} rate item(s) added` : ''}.`);
         route();
+    } catch (e) { alert(e.message); }
+}
+
+</script>
+<script>/* js/gstin.js */
+'use strict';
+// ===================== We Create ERP · reading a GSTIN =====================
+// A GSTIN carries the state (digits 1–2), the full PAN (3–12), the registration number under that PAN in the state
+// (13) and a check digit (15). The PAN's 4th letter tells the kind of taxpayer. That much is decoded here, offline.
+// Name, address, constitution and "nature of business activities" live on the GST portal: they need a GST lookup
+// service (a GSP / GST API provider) set in Settings → GST & TDS. Without one, the nature of business is suggested
+// from the business name.
+
+const PAN_HOLDER = {
+    P: ['Individual', 'Proprietorship'], C: ['Company', 'Private Ltd'], F: ['Firm / LLP', 'Partnership'], H: ['Hindu Undivided Family', 'HUF'],
+    A: ['Association of Persons', 'Trust / Society'], T: ['Trust', 'Trust / Society'], B: ['Body of Individuals', 'Trust / Society'],
+    L: ['Local authority', 'Trust / Society'], J: ['Artificial juridical person', 'Trust / Society'], G: ['Government', 'Trust / Society']
+};
+const ordinal = n => n + (['th', 'st', 'nd', 'rd'][(n % 100 - 20) % 10] || ['th', 'st', 'nd', 'rd'][n % 100] || 'th');
+
+function decodeGstin(g) {
+    g = String(g || '').toUpperCase().trim();
+    if (!gstinValid(g)) return null;
+    const pan = g.slice(2, 12), h = PAN_HOLDER[pan[3]] || ['Other', ''];
+    const n = /\d/.test(g[12]) ? Number(g[12]) : g.charCodeAt(12) - 55;   // 1–9, then A = 10 …
+    return { gstin: g, state: g.slice(0, 2), stateName: STATES[g.slice(0, 2)], pan, holder: h[0], entity: h[1], regNo: n, text: `${STATES[g.slice(0, 2)]} · PAN ${pan} · ${h[0]} · ${ordinal(n)} registration under this PAN in the state` };
+}
+
+// ---------- lookup service (optional) ----------
+const gstLookupCfg = () => meta.gstLookup || {};
+const gstLookupReady = () => /\{gstin\}/.test(gstLookupCfg().url || '');
+// Accepts the GSTN "search taxpayer" record as returned by GSP / API providers, at the root or wrapped in
+// taxpayerInfo / data / result.
+function parseGstRecord(j) {
+    const find = o => { if (!o || typeof o !== 'object') return null; if (o.lgnm || o.tradeNam) return o; for (const k of ['taxpayerInfo', 'data', 'result', 'response']) { const r = find(o[k]); if (r) return r; } return null; };
+    const r = find(j);
+    if (!r) return null;
+    const a = r.pradr?.addr || {};
+    const street = [a.flno, a.bno, a.bnm, a.st, a.loc].filter(Boolean).join(', ');
+    const CTB = { 'Proprietorship': 'Proprietorship', 'Partnership': 'Partnership', 'Limited Liability Partnership': 'LLP', 'Private Limited Company': 'Private Ltd', 'Public Limited Company': 'Public Ltd', 'Hindu Undivided Family': 'HUF', 'Society/ Club/ Trust/ AOP': 'Trust / Society' };
+    const nba = Array.isArray(r.nba) ? r.nba : r.nba ? [r.nba] : [];
+    return {
+        legalName: r.lgnm || '', tradeName: r.tradeNam || r.lgnm || '', status: r.sts || '', since: r.rgdt || '', type: r.dty || '', constitution: r.ctb || '',
+        entity: CTB[r.ctb] || '', nba, address: street || r.pradr?.adr || '', city: a.dst || a.city || a.loc || '', pincode: a.pncd || '', state: a.stcd || ''
+    };
+}
+async function fetchGstin(g) {
+    const c = gstLookupCfg();
+    if (!gstLookupReady()) throw new Error('No GST lookup service is set up. Add one in Settings → GST & TDS.');
+    const headers = {};
+    if (c.header && c.key) headers[c.header] = c.key;
+    const res = await fetch(c.url.replace('{gstin}', encodeURIComponent(g)).replace('{key}', encodeURIComponent(c.key || '')), { headers });
+    if (!res.ok) throw new Error(`The lookup service answered ${res.status}.`);
+    const rec = parseGstRecord(await res.json());
+    if (!rec) throw new Error('The lookup service did not return taxpayer details for this GSTIN.');
+    return rec;
+}
+
+// ---------- nature of business: from the GST record's business activities, or the name ----------
+const NAME_HINTS = [
+    ['hotel', /\b(hotels?|lodge|residency|inn|resorts?|homestay|guest ?house|suites|stay)\b/i],
+    ['restaurant', /\b(restaurant|cafe|café|bakery|bakes|sweets?|foods?|kitchen|biryani|mess|caterers?|catering|dhaba|bhavan|juice)\b/i],
+    ['healthcare', /\b(hospitals?|clinic|medical|pharma|pharmacy|medicals|diagnostics?|labs?|healthcare|dental|nursing|scans?)\b/i],
+    ['education', /\b(school|academy|college|educational|institute|tuition|coaching|vidyalaya|matriculation)\b/i],
+    ['transport', /\b(transports?|logistics|cargo|roadways|carriers|movers|freight|couriers?)\b/i],
+    ['tour', /\b(tours|travels|holidays|tourism)\b/i],
+    ['construction', /\b(builders?|constructions?|developers|infra|infrastructure|realty|estates?|promoters)\b/i],
+    ['wellness', /\b(salon|spa|fitness|gym|beauty|parlou?r|yoga|wellness)\b/i],
+    ['textiles', /\b(textiles?|garments?|fashions?|silks?|apparels?|readymades?|footwear|tailors?|boutique)\b/i],
+    ['jewellery', /\b(jewell?ers?|jewell?ery|gold|thanga|maaligai|diamonds?)\b/i],
+    ['professional', /\b(consultants?|consultancy|advocates?|associates|chartered|solutions|technologies|infotech|software|systems|services llp|architects?|legal|& co\.?)\b/i],
+    ['manufacturer', /\b(industries|manufactur\w*|mills?|factory|udyog|polymers?|plastics?|pack|packaging|engineering works|fabricators?|steels?)\b/i],
+    ['ecommerce', /\b(online|e-?commerce|ecom)\b/i],
+    ['rental', /\b(properties|leasing|rentals?)\b/i],
+    ['trader', /\b(traders?|trading|stores?|agencies|enterprises|distributors?|suppliers?|marts?|super ?market|wholesale|electricals|hardwares?|provisions|depot|emporium)\b/i]
+];
+function guessIndustry({ name = '', nba = [], type = '' } = {}) {
+    const acts = nba.join(' | ');
+    const byName = NAME_HINTS.find(([, re]) => re.test(name))?.[0];
+    let id = byName || '', why = byName ? `the name "${name}"` : '';
+    // The GST record's business activities settle goods vs services when the name does not
+    if (/Factory|Manufactur/i.test(acts) && (!id || ['trader', 'other'].includes(id))) { id = 'manufacturer'; why = 'the GST registration (factory / manufacturing)'; }
+    else if (/Wholesale|Retail/i.test(acts) && !id) { id = 'trader'; why = 'the GST registration (wholesale / retail business)'; }
+    else if (/Leasing/i.test(acts) && !id) { id = 'rental'; why = 'the GST registration (leasing business)'; }
+    else if (/Supplier of Services/i.test(acts) && !id) { id = 'professional'; why = 'the GST registration (supplier of services)'; }
+    if (!id) return null;
+    return { industry: id, why, composition: /Composition/i.test(type) };
+}
+// What a GSTIN tells us, as a short line for forms
+function gstinHintHtml(g, name = '') {
+    if (!g) return '';
+    const d = decodeGstin(g);
+    if (!d) return '<span style="color:var(--bad)">Not a valid GSTIN yet</span>';
+    const gi = guessIndustry({ name });
+    return `✓ ${esc(d.text)}${gi ? ` · looks like <b>${esc(INDUSTRIES[gi.industry].name)}</b>` : ''}`;
+}
+
+// ---------- settings card ----------
+function gstLookupSettingsHtml() {
+    const c = gstLookupCfg();
+    return `<div class="card"><h2>GSTIN lookup service</h2>
+        <p class="note" style="margin-bottom:10px">Every GSTIN is decoded here without internet: state, PAN, type of taxpayer and registration number. The legal and trade name, address, constitution and nature of business are held by GSTN; the public search on gst.gov.in needs a captcha, so fetching them automatically needs a GST data service (a GSP or GST API provider) and its key. Enter its address with <code>{gstin}</code> where the number goes (and <code>{key}</code> if the key goes in the address).</p>
+        <div class="fg"><label class="f">Service address<input id="gl_url" value="${esc(c.url || '')}" placeholder="https://provider.example/search?gstin={gstin}&key={key}"></label>
+        <label class="f">Key goes in header <span class="hint">leave blank if in the address</span><input id="gl_header" value="${esc(c.header || '')}" placeholder="e.g. x-api-key"></label>
+        <label class="f">API key<input id="gl_key" type="password" value="${esc(c.key || '')}"></label></div>
+        ${isAdmin() ? `<div class="row" style="margin-top:10px"><button class="btn btn-p btn-sm" onclick="saveGstLookup()">Save</button>${gstLookupReady() ? '<span class="badge good">Lookup on</span>' : '<span class="badge">Not set — names are suggested from the GSTIN and business name only</span>'}</div>` : ''}</div>`;
+}
+function saveGstLookup() {
+    const url = $('#gl_url').value.trim();
+    if (url && !/^https:\/\/.+\{gstin\}/.test(url)) return alert('The address must start with https:// and contain {gstin}.');
+    meta.gstLookup = { url, header: $('#gl_header').value.trim(), key: $('#gl_key').value.trim() };
+    auditMeta('GSTIN lookup service changed', { entity: 'Settings', ref: url ? new URL(url.replace(/\{\w+\}/g, 'x')).host : 'removed' });
+    saveMeta(); toast(url ? 'GSTIN lookup saved.' : 'GSTIN lookup removed.'); route();
+}
+// Fill a form from the GST record. map: { field: inputId }
+async function fetchGstinInto(gInput, map, after) {
+    const g = $(gInput).value.toUpperCase().trim();
+    if (!gstinValid(g)) return alert('Enter a valid GSTIN first.');
+    try {
+        toast('Fetching from the GST lookup service…');
+        const r = await fetchGstin(g);
+        Object.entries(map).forEach(([k, id]) => { const el = $(id); if (el && r[k]) el.value = r[k]; });
+        after?.(r);
+        toast(`${r.tradeName || r.legalName}: ${r.status || 'details'} filled in.`);
     } catch (e) { alert(e.message); }
 }
 
