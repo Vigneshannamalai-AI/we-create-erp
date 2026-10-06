@@ -647,7 +647,7 @@ function viewSettings(tab) {
     } else {
         body = `<div class="card"><h2>Backup</h2><p class="note" style="margin-bottom:10px">Downloads every company, user and audit log in one file. Bill attachments are included. Keep it safe (for example in Google Drive).</p><button class="btn btn-p" onclick="exportAll()">${ic('dl')} Download full backup</button></div>
             ${isAdmin() ? `<div class="card"><h2>Restore</h2><p class="note" style="margin-bottom:10px">Replaces everything in this browser with the backup.</p><div class="row"><input type="file" id="rsFile" accept=".json"><button class="btn btn-d btn-sm" onclick="importAll()">Restore</button></div></div>
-            <div class="card"><h2>Remove this company from this browser</h2><p class="note" style="margin-bottom:10px">Books must be kept for at least 8 years (Companies Act s.128). Download a backup first. Use this only for test or sample companies.</p><button class="btn btn-d btn-sm" onclick="removeCompany()">Remove ${esc(co.profile.name)}</button></div>` : ''}`;
+            <div class="card"><h2>Delete this company</h2><p class="note" style="margin-bottom:10px">Books must be kept for at least 8 years (Companies Act s.128). Download a backup first. Use this only for test or sample companies.</p><button class="btn btn-d btn-sm" onclick="removeCompany()">Delete ${esc(co.profile.name)}</button></div>` : ''}`;
     }
     $('#view').innerHTML = pageHead('Settings', isAdmin() ? '' : 'Only the owner can change settings.') + `<div class="tabs">${tabs.map(([k, l]) => `<a href="#/settings/${k}" class="${tab === k ? 'on' : ''}">${l}</a>`).join('')}</div>` + body;
 }
@@ -801,15 +801,7 @@ async function importAll() {
     try { sessionStorage.removeItem('wcerp.session'); } catch (e) { /* ignore */ }
     location.reload();
 }
-async function removeCompany() {
-    const name = await ask({ title: 'Remove company', message: `Type the company name to remove "${co.profile.name}" and all its data from this browser.`, input: 'Company name', ok: 'Remove', danger: true });
-    if (name === null) return;
-    if (name !== co.profile.name) return alert('The name did not match. Nothing was removed.');
-    auditMeta('Company removed from this browser', { entity: 'Company', ref: co.profile.name });
-    store.del(co.id);
-    meta.companies = meta.companies.filter(c => c.id !== co.id);
-    saveMeta(); co = null; go('#/companies');
-}
+const removeCompany = () => deleteCompany(co.id);
 
 function billFrom2b(id) {
     const r = co.gstr2b.find(x => x.id === id);

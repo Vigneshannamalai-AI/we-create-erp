@@ -430,8 +430,9 @@ Grand Total                                     14,632.00`;
         const ep = buildLinkedCompany('ecopack', true).company;
         const epB = bsData(today), inv = ep.vouchers.filter(v => v.type === 'SI').length, bills = ep.vouchers.filter(v => v.type === 'PB').length, prod = ep.vouchers.filter(v => v.type === 'SJ').length;
         const ok = sbOk && near(sbBs.totalEL, sbBs.totalA) && near(epB.totalEL, epB.totalA) && inv > 0 && bills > 0 && prod > 0 && !ep.links.ecopack.lastReport.needs.length && ep.profile.biz.industry === 'manufacturer'
+            && !complianceItems(fy).some(i => i.state === 'overdue')
             && meta.companies.length === n + 2 && meta.companies.slice(-2).map(c => c.link).join() === 'staybay,ecopack' && !Object.keys(home.links || {}).length;
-        return ok || JSON.stringify({ sbOk, inv, bills, prod, needs: ep.links.ecopack.lastReport.needs, sbBs: [sbBs.totalEL, sbBs.totalA], ep: [epB.totalEL, epB.totalA], fails: ep.links.ecopack.lastReport.failed.slice(0, 3) });
+        return ok || JSON.stringify({ od: complianceItems(fy).filter(i => i.state === 'overdue').map(i => i.type + ' ' + i.period), sbOk, inv, bills, prod, needs: ep.links.ecopack.lastReport.needs, sbBs: [sbBs.totalEL, sbBs.totalA], ep: [epB.totalEL, epB.totalA], fails: ep.links.ecopack.lastReport.failed.slice(0, 3) });
     });
     check('Demo re-sync adds nothing; a company not connected to a dashboard refuses to sync', () => {
         const n = co.vouchers.length;
@@ -444,6 +445,31 @@ Grand Total                                     14,632.00`;
         const listed = linkedCompanies('staybay').some(c => c.id === sbId);
         return (same && refused && listed) || JSON.stringify({ same, refused, listed });
     });
+    check('Dashboard links open their own company: STAY BAY → STAY BAY payroll, Eco Pack → Eco Pack', () => {
+        const route0 = window.route, last0 = meta.lastCompany; window.route = () => {};
+        try {
+            openLinked('staybay'); const a = co.links?.staybay && location.hash === '#/payroll';
+            openLinked('ecopack'); const b = co.links?.ecopack && location.hash === '#/dashboard';
+            openLinked('staybay'); const c = co.links?.staybay && !co.links?.ecopack;
+            return (a && b && c) || JSON.stringify({ a, b, c, name: co.profile.name });
+        } finally { window.route = route0; meta.lastCompany = last0; co = home; ver++; }
+    });
+    await (async () => {
+        const ask0 = window.ask, route0 = window.route, go0 = window.go, alert0 = window.alert;
+        try {
+            window.alert = () => {};
+            const target = meta.companies.find(c => c.link === 'ecopack');
+            window.route = () => {}; window.go = () => {};
+            window.ask = async () => 'wrong name';
+            await deleteCompany(target.id);
+            const kept = meta.companies.some(c => c.id === target.id);
+            window.ask = async () => target.name;
+            await deleteCompany(target.id);
+            const gone = !meta.companies.some(c => c.id === target.id) && !loadCo(target.id);
+            results.push({ name: 'Delete company: needs the exact name, then removes it and its data', ok: kept && gone, note: JSON.stringify({ kept, gone }) });
+        } catch (e) { results.push({ name: 'Delete company', ok: false, note: e.message }); }
+        finally { window.ask = ask0; window.route = route0; window.go = go0; window.alert = alert0; co = home; ver++; }
+    })();
     co = home; ver++;
 
     // ---------- screens ----------

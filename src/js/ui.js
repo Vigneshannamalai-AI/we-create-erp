@@ -323,6 +323,7 @@ const ROUTES = [
     [/^#\/companies$/, () => viewCompanies(), true],
     [/^#\/dashboard$/, () => viewDashboard()],
     [/^#\/business$/, () => viewBusiness()],
+    [/^#\/open\/(staybay|ecopack)$/, m => openLinked(m[1]), true],
     [/^#\/(sales|purchases|notes|receipts|payments|journals)$/, m => viewVoucherList(m[1])],
     [/^#\/new\/(SI|PB|CN|DN|RC|PY|JV|CT|SJ)$/, m => viewVoucherForm({ type: m[1] })],
     [/^#\/edit\/(.+)$/, m => viewVoucherForm(vById(m[1]))],
@@ -467,6 +468,41 @@ function wireSearch() {
 }
 
 // ---------- practice workspace (all companies) ----------
+function editCompany(id) {
+    if (co?.id !== id && !openCompany(id)) return;
+    state.fy = defaultFy();
+    companyForm(true);
+}
+async function deleteCompany(id) {
+    const c = meta.companies.find(x => x.id === id), d = loadCo(id);
+    if (!c) return;
+    const name = d?.profile?.name || c.name;
+    const n = d?.vouchers?.length || 0;
+    const typed = await ask({ title: 'Delete company', message: `This deletes "${name}" and all its data${n ? ` (${n} entries)` : ''} from this browser. It cannot be undone — download a backup from Settings first if you may need it. Books must be kept for 8 years, so delete only test, sample or duplicate companies. Type the company name to confirm.`, input: 'Company name', ok: 'Delete', danger: true });
+    if (typed === null) return;
+    if (typed.trim() !== name) return alert('The name did not match. Nothing was deleted.');
+    auditMeta('Company deleted from this browser', { entity: 'Company', ref: name, after: `${n} entries` });
+    store.del(id);
+    meta.companies = meta.companies.filter(x => x.id !== id);
+    if (meta.lastCompany === id) meta.lastCompany = '';
+    if (co?.id === id) co = null;
+    saveMeta();
+    toast(`${name} deleted.`);
+    location.hash === '#/companies' ? route() : go('#/companies');
+}
+// Opened from a dashboard (e.g. STAY BAY's "Open We Create ERP"): go straight to that dashboard's own company
+function openLinked(k) {
+    const list = linkedCompanies(k).filter(c => userCompanies().some(u => u.id === c.id));
+    const pick = list.find(c => !c.demo) || list[0];
+    if (pick) {
+        if (co?.id !== pick.id && openCompany(pick.id)) { state.fy = defaultFy(); audit('Company opened', { entity: 'Company', ref: co.profile.name, reason: `From the ${SOURCE_LABEL[k]} dashboard` }); saveCo(); autoSync(); }
+        history.replaceState(null, '', k === 'staybay' ? '#/payroll' : '#/dashboard');
+        return route();
+    }
+    if (!co) return go('#/companies');
+    toast(`No company is connected to ${SOURCE_LABEL[k]} yet — create it here.`);
+    go('#/connect');
+}
 function viewCompanies() {
     const list = userCompanies();
     const cards = list.map(c => {
@@ -485,7 +521,8 @@ function viewCompanies() {
         const out = `<div class="card co-card" onclick="pickCompany('${c.id}')">
             <div class="row" style="justify-content:space-between;align-items:flex-start"><div><b style="font-size:15px">${esc(d.profile.name)}</b><div class="note">${esc(d.profile.entity)} · ${esc(d.profile.gstin || 'No GSTIN')}</div></div>${saved?.id === c.id ? '<span class="badge brand">Open</span>' : ''}</div>
             <div class="row" style="margin-top:12px;gap:6px">${overdue ? `<span class="badge bad">${overdue} overdue</span>` : '<span class="badge good">No overdue filings</span>'}${soon ? `<span class="badge warn">${soon} due this week</span>` : ''}<span class="badge">${d.vouchers.length} entries</span></div>
-            <div class="note" style="margin-top:10px">Receivables ${inr0(recv)} · ${esc(STATES[d.profile.state] || '')}</div></div>`;
+            <div class="note" style="margin-top:10px">Receivables ${inr0(recv)} · ${esc(STATES[d.profile.state] || '')}${c.link ? ` · connected to ${esc(SOURCE_LABEL[c.link])}` : ''}</div>
+            ${isAdmin() ? `<div class="row co-actions" style="margin-top:12px;gap:8px" onclick="event.stopPropagation()"><button class="btn btn-s btn-sm" onclick="editCompany('${c.id}')">Edit details</button><button class="btn btn-d btn-sm" onclick="deleteCompany('${c.id}')">Delete</button></div>` : ''}</div>`;
         co = saved; ver++;
         return out;
     }).join('');
@@ -540,6 +577,7 @@ function companyForm(existing) {
                 if (existing) {
                     audit('Company details changed', { entity: 'Company', ref: np.name, after: diffFields(co.profile, np, Object.keys(np)) });
                     Object.assign(co.profile, np);
+                    const m = meta.companies.find(c => c.id === co.id); if (m) { m.name = np.name; m.gstin = np.gstin; saveMeta(); }
                     saveCo(); closeModal(); route(); toast('Company details saved.');
                 } else {
                     const c = newCompanyData(np);

@@ -4,7 +4,7 @@
 const MANUAL = [
     ['start', 'Getting started', `
         <ol><li>Open <b>we-create-erp.html</b> in Chrome or Edge. The first time, create the <b>owner account</b> (your name, a username and a password of at least 4 characters).</li>
-        <li>Tick <b>Add a sample company</b> to explore with 18 months of ready-made entries, or create your own company from <b>All companies → + New company</b>.</li>
+        <li>Tick <b>Add a sample company</b> to explore with 18 months of ready-made entries, or create your own company from <b>All companies → + New company</b>. Each company card there has <b>Edit details</b> and <b>Delete</b> (type the company name to confirm; download a backup first — deleting cannot be undone).</li>
         <li>Fill in the company details: trade and legal name, type of entity, <b>GSTIN</b> (state and PAN fill in from it), TAN, address, books start date and last year's turnover.</li>
         <li>Go to <b>Chart of accounts</b>, add your bank account(s) under <i>Bank Accounts</i> and enter opening balances as on the books start date. Add customers, vendors and items with their opening balances and stock.</li>
         <li>Check that the opening balances tally (Chart of accounts shows a ✓ or the difference).</li></ol>

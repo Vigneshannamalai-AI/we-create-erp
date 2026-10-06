@@ -380,6 +380,15 @@ function buildLinkedCompany(k, demo) {
     applyBusinessProfile({ ...bizDefaults(), ...LINKED_BIZ[k], employees: n || LINKED_BIZ[k].employees, ...(demo ? {} : { turnoverLast: 0, turnoverExp: 0 }) }, { from: p.booksFrom });
     let rep = null;
     if (S) rep = k === 'staybay' ? syncStayBay(S) : syncEcoPack(S);
+    // Demo data: returns and deposits already past their due date are shown as filed on time, like the sample company
+    if (demo) {
+        const t = todayISO(), bank = co.links[k].bank;
+        statDues(fyOf(t)).filter(x => x.pending > 0.5 && STAT[x.k].due(x.ym) < t).forEach(x => {
+            const date = addDays(STAT[x.k].due(x.ym), -1);
+            try { saveVoucher({ type: 'PY', date, accountId: bank, ledgerId: sysId(STAT[x.k].ledger), taxMonth: x.ym, amount: x.pending, challan: x.k === 'tds' ? { bsr: '0510308', serial: String(10000 + Number(x.ym.slice(5)) * 37) } : undefined, narration: `${STAT[x.k].label} for ${ymLabel(x.ym)} (demo)` }, { source: 'Demo data' }); } catch (e) { console.warn(e); }
+        });
+    }
+    if (demo) complianceItems(fyOf(todayISO())).filter(i => i.state === 'overdue').forEach(i => { try { markFiled(i.type, i.period, 'DEMO', addDays(i.due, -1)); } catch (e) { /* already filed */ } });
     saveCo(); saveMeta();
     return { company: c, rep };
 }
