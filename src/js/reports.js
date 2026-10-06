@@ -268,13 +268,18 @@ function viewGst(tab) {
     if (!months.includes(gstMonth)) gstMonth = months.at(-1) || ymOf(todayISO());
     const ym = gstMonth;
     const filed = t => co.filings.find(f => f.type === t && (f.period === ym || f.period === `${quarterOf(ym)}-${fyOf(ym + '-01')}`));
-    const tabs = [['plan', 'This month: what to do'], ['r1', 'GSTR-1'], ['2b', 'GSTR-2B / IMS'], ['r3b', 'GSTR-3B'], ['gstr9', 'GSTR-9 annual'], ['ein', 'e-Invoice & e-Way bill'], ['health', 'Pre-filing check']];
+    const comp = co.profile.gstType === 'composition';
+    if (comp && ['r1', '2b', 'r3b', 'gstr9', 'plan'].includes(tab)) tab = 'cmp';
+    const tabs = comp ? [['cmp', 'CMP-08 & GSTR-4'], ['ein', 'e-Way bill'], ['health', 'Pre-filing check']]
+        : [['plan', 'This month: what to do'], ['r1', 'GSTR-1'], ['2b', 'GSTR-2B / IMS'], ['r3b', 'GSTR-3B'], ['gstr9', 'GSTR-9 annual'], ['ein', 'e-Invoice & e-Way bill'], ['health', 'Pre-filing check']];
     const head = pageHead('GST', `Returns are built from your invoices and bills. ${co.profile.gstin ? `GSTIN ${esc(co.profile.gstin)}` : '<b>Add your GSTIN in Settings.</b>'}`, `<select onchange="gstMonth=this.value;route()">${months.map(m => opt(m, ymLabel(m), ym)).join('')}</select>`)
         + `<div class="tabs">${tabs.map(([k, l]) => `<a href="#/gst/${k}" class="${tab === k ? 'on' : ''}">${l}</a>`).join('')}</div>`;
     let body = '';
     const sumRow = (label, o) => `<tr><td>${label}</td>${amtCell(o.txval ?? '')}${amtCell(o.iamt)}${amtCell(o.camt)}${amtCell(o.samt)}</tr>`;
     const steps = (list) => `<ol class="steps">${list.map(x => `<li>${x}</li>`).join('')}</ol>`;
-    if (tab === 'plan') {
+    if (tab === 'cmp') {
+        body = compositionHtml();
+    } else if (tab === 'plan') {
         const A = gstAdvice(ym);
         const lv = { bad: 'bad', warn: 'warn', info: '', good: '' };
         body = `<div class="card"><h2>GST for ${ymLabel(ym)} — step by step</h2>${A.map(a => `<a class="alert ${lv[a.level]}" href="${a.route}" style="text-decoration:none;color:inherit;align-items:flex-start"><span class="dot" ${a.level === 'good' ? 'style="background:var(--good)"' : ''}></span><span class="t"><b>${esc(a.text)}</b><small style="white-space:normal">${esc(a.how)}</small></span></a>`).join('') || '<p class="note">Nothing to do for this month.</p>'}</div>
@@ -302,10 +307,10 @@ function viewGst(tab) {
             ${filed('GSTR-3B') ? '' : steps(['On the portal, open GSTR-3B for the period. Outward tax (3.1) is filled from your GSTR-1 and locked; credit (4) is filled from GSTR-2B.', 'Compare each box with this screen. Change table 4 if needed (for example credit held back here because it is not in 2B).', `Create the challan for the cash part (${inr(s.totalCash)}), pay it, then <b>Offset liability</b> and file with DSC / EVC.`, 'Here: press <b>Post set-off journal</b>, record the cash payment with <b>Pay GST</b>, and <b>Mark as filed</b> with the ARN.'])}
             <p class="note" style="margin:8px 0">The GST portal does not accept a GSTR-3B file upload from taxpayers — it fills the return for you. The JSON is for GST Suvidha Providers and tax-professional software.</p><div id="g3T">
             <h2>3.1 Outward and inward supplies liable to reverse charge</h2><div class="tw"><table class="t"><thead><tr><th>Nature</th><th class="n">Taxable</th><th class="n">IGST</th><th class="n">CGST</th><th class="n">SGST</th></tr></thead><tbody>
-            ${sumRow('(a) Outward taxable supplies', g.a)}${sumRow('(b) Zero-rated (export / SEZ)', g.b)}${sumRow('(c) Nil-rated / exempt', g.c)}${sumRow('(d) Inward supplies under reverse charge', g.d)}</tbody></table></div>
+            ${sumRow('(a) Outward taxable supplies', g.a)}${sumRow('(b) Zero-rated (export / SEZ)', g.b)}${sumRow('(c) Nil-rated / exempt', g.c)}${g.eco.txval ? sumRow('3.1.1(ii) Supplies through a food app / e-commerce operator, tax paid by the operator (s.9(5))', g.eco) : ''}${sumRow('(d) Inward supplies under reverse charge', g.d)}</tbody></table></div>
             ${g.interUnreg.length ? `<h2 style="margin-top:14px">3.2 Inter-state supplies to unregistered persons</h2><div class="tw"><table class="t"><thead><tr><th>Place of supply</th><th class="n">Taxable</th><th class="n">IGST</th></tr></thead><tbody>${g.interUnreg.map(x => `<tr><td>${esc(stateName(x.pos))}</td>${amtCell(x.txval)}${amtCell(x.iamt)}</tr>`).join('')}</tbody></table></div>` : ''}
             <h2 style="margin-top:14px">4. Eligible ITC</h2><div class="tw"><table class="t"><thead><tr><th>Details</th><th class="n"></th><th class="n">IGST</th><th class="n">CGST</th><th class="n">SGST</th></tr></thead><tbody>
-            ${sumRow('A(3) Inward supplies under reverse charge', { ...g.itcRcm, txval: '' })}${sumRow(`A(5) All other ITC${g.basis === '2B' ? ' (as per GSTR-2B)' : ''}`, { ...g.itcOther, txval: '' })}${sumRow('B(2) Reversed (debit notes / returns)', { ...g.reversal, txval: '' })}${sumRow('Credit brought forward from earlier months', { ...g.carryIn, txval: '' })}${sumRow('C. Net ITC available', { ...g.itcNet, txval: '' })}${sumRow('D. Ineligible ITC (section 17(5))', { ...g.ineligible, txval: '' })}</tbody></table></div>
+            ${sumRow('A(3) Inward supplies under reverse charge', { ...g.itcRcm, txval: '' })}${sumRow(`A(5) All other ITC${g.basis === '2B' ? ' (as per GSTR-2B)' : ''}`, { ...g.itcOther, txval: '' })}${g.ratio42 ? sumRow(`B(1) Reversed under Rule 42 (common credit × ${(g.ratio42 * 100).toFixed(1)}% no-credit / exempt turnover)`, { ...g.rule42, txval: '' }) : ''}${sumRow('B(2) Reversed (debit notes / returns)', { ...g.reversal, txval: '' })}${sumRow('Credit brought forward from earlier months', { ...g.carryIn, txval: '' })}${sumRow('C. Net ITC available', { ...g.itcNet, txval: '' })}${sumRow('D. Ineligible ITC (section 17(5))', { ...g.ineligible, txval: '' })}</tbody></table></div>
             <h2 style="margin-top:14px">6.1 Payment of tax</h2><div class="tw"><table class="t"><thead><tr><th></th><th class="n">IGST</th><th class="n">CGST</th><th class="n">SGST</th></tr></thead><tbody>
             <tr><td>Tax payable (other than reverse charge)</td>${amtCell(g.liab.iamt)}${amtCell(g.liab.camt)}${amtCell(g.liab.samt)}</tr>
             <tr><td>Paid through ITC</td>${amtCell(s.use.iamt.iamt + s.use.camt.iamt + s.use.samt.iamt)}${amtCell(s.use.iamt.camt + s.use.camt.camt)}${amtCell(s.use.iamt.samt + s.use.samt.samt)}</tr>
@@ -612,7 +617,7 @@ function viewSettings(tab) {
             ${sel('gstFreq', 'Return filing', [['monthly', 'Monthly GSTR-1 and GSTR-3B'], ['quarterly', 'Quarterly — QRMP scheme (turnover up to ₹5 crore)']])}
             ${fld('aato', 'Last year turnover (₹)', 'Above ₹5 crore: e-invoicing; ₹10 crore+: 30-day reporting limit', 'number')}
             ${fld('lutNo', 'LUT reference (ARN)', 'For exports / SEZ without IGST')}${fld('lutTill', 'LUT valid till', '', 'date')}
-            </div><p class="note" style="margin-top:10px">${p.gstType === 'composition' ? 'Composition: sales print as "Bill of Supply" with no GST, and purchases carry no input credit. File CMP-08 quarterly and GSTR-4 yearly.' : 'Regular: tax invoices with GST; input credit on eligible purchases.'}</p></div>
+            </div><p class="note" style="margin-top:10px">${p.gstType === 'composition' ? `Composition at ${p.compRate || 1}%: sales print as "Bill of Supply" with no GST, and purchases carry no input credit. File CMP-08 quarterly and GSTR-4 yearly.` : `Regular: tax invoices with GST; input credit ${{ full: 'on eligible purchases', none: 'not claimed (your supplies are without credit)', mixed: 'claimed with Rule 42 reversal of common credit' }[p.itcPolicy || 'full']}.`} The <a href="#/business">Business profile</a> works these out from your industry and size.</p></div>
             <div class="card"><h2>TDS / TCS (deductor details for returns)</h2><div class="fg">
             ${fld('tan', 'TAN', 'e.g. CHEA12345B', 'text', 'maxlength="10" style="text-transform:uppercase"')}
             ${sel('deductorType', 'Type of deductor', [['company', 'Company'], ['firm', 'Firm / LLP'], ['individual', 'Individual / HUF (audited)'], ['aop', 'AOP / BOI / Trust'], ['govt', 'Government']])}

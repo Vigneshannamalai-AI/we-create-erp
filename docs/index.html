@@ -379,6 +379,18 @@ select{max-width:100%}
 .steps{margin:6px 0 4px 20px;line-height:1.75;font-size:13.5px}
 .steps li{padding-left:2px}
 
+/* business profile */
+.inds{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:8px}
+.ind{display:flex;align-items:center;gap:10px;text-align:left;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--card,#fff);font:inherit;font-size:13px;color:inherit;cursor:pointer;min-height:48px}
+.ind span{font-size:20px;flex:none}
+.ind:hover{border-color:var(--brand)}
+.ind.on{border-color:var(--brand);background:var(--brand-soft);font-weight:600}
+.rules{list-style:none;margin:0;padding:0}
+.rules li{padding:8px 0;border-top:1px solid var(--line)}
+.rules li:first-child{border-top:0}
+.rules .note{margin-top:2px}
+@media (max-width:700px){.inds{grid-template-columns:1fr 1fr}.ind{font-size:12px;padding:8px}}
+
 </style>
 </head>
 <body>
@@ -736,7 +748,8 @@ const SYS_ACCOUNTS = [
     ['discountAllowed', 'Discount Allowed', 'indexp'], ['misc', 'Miscellaneous Expenses', 'indexp'], ['otherIncome', 'Interest Received', 'indinc'],
     ['erPf', "Employer's Contribution to PF", 'empexp'], ['erEsi', "Employer's Contribution to ESI", 'empexp'],
     ['salPay', 'Salary Payable', 'curliab'], ['pfPay', 'PF Payable', 'duties'], ['esiPay', 'ESI Payable', 'duties'], ['ptPay', 'Professional Tax Payable', 'duties'],
-    ['tdsSalPay', 'TDS on Salary Payable', 'duties'], ['salAdv', 'Salary Advances to Staff', 'loansadv'], ['repairs', 'Repairs & Maintenance – Machinery', 'direxp']
+    ['tdsSalPay', 'TDS on Salary Payable', 'duties'], ['salAdv', 'Salary Advances to Staff', 'loansadv'], ['repairs', 'Repairs & Maintenance – Machinery', 'direxp'],
+    ['itcRev', 'Input Tax Credit Reversed (Rule 42)', 'indexp'], ['compTax', 'Composition Tax (GST)', 'indexp'], ['compPay', 'GST Payable – Composition', 'duties']
 ];
 
 const VTYPES = {
@@ -900,6 +913,8 @@ function upgradeCo(c) {
     c.vouchers.forEach(v => { if (v.tdsMonth && !v.taxMonth) { v.taxMonth = v.tdsMonth; delete v.tdsMonth; } });
     c.settings ||= { lockDate: '', prefixes: {} };
     SYS_ACCOUNTS.forEach(([sys, name, group]) => { if (!c.accounts.some(a => a.sys === sys)) c.accounts.push({ id: uid('acc'), sys, name, group, openDr: 0, openCr: 0 }); });
+    // The sample trading company is never connected to STAY BAY / Eco Pack; they have their own companies
+    if ((c.profile.sample || c.audit.some(a => a.action === 'Sample data loaded')) && Object.keys(c.links).length) c.links = {};
     return c;
 }
 
@@ -992,13 +1007,18 @@ function computeVoucher(v) {
     // An unregistered supplier cannot charge GST; only notified reverse-charge supplies carry tax (paid by us).
     const composition = co.profile.gstType === 'composition';
     const noTax = (purchaseSide && !isRegistered(party) && !v.rcm) || (!purchaseSide && composition);
-    if (purchaseSide && composition) v.itc = false;
+    // Composition dealers and businesses whose supplies carry no input credit (e.g. hotel rooms up to ₹7,500, restaurants)
+    if (purchaseSide && (composition || (co.profile.itcPolicy === 'none' && v.date >= (co.profile.itcPolicyFrom || '')))) v.itc = false;
     const t = { taxable: 0, cgst: 0, sgst: 0, igst: 0, cess: 0, qty: 0 };
     (v.lines || []).forEach(l => {
         const gross = r2((Number(l.qty) || 0) * (Number(l.rate) || 0));
         l.discAmt = r2(gross * (Number(l.disc) || 0) / 100);
         l.taxable = r2(gross - l.discAmt);
-        const rate = noTax || (zeroRated && !withPay) ? 0 : Number(l.gstRate) || 0;
+        // Food-app orders (the app pays GST, s.9(5)) and services where the customer pays under reverse charge carry no tax on our bill
+        const it = !purchaseSide && itemById(l.itemId);
+        l.eco95 = Boolean(it?.eco95) || undefined;
+        l.rcmOut = Boolean(it?.rcmOut && isRegistered(party)) || undefined;
+        const rate = noTax || (zeroRated && !withPay) || l.eco95 || l.rcmOut ? 0 : Number(l.gstRate) || 0;
         l.cgst = l.sgst = l.igst = 0;
         if (inter) l.igst = r2(l.taxable * rate / 100);
         else { l.cgst = r2(l.taxable * rate / 200); l.sgst = l.cgst; }
@@ -1681,10 +1701,11 @@ function gstr3b(ym) {
     const sales = activeIn(['SI'], ym), notes = activeIn(['CN'], ym), bills = activeIn(['PB'], ym), dns = activeIn(['DN'], ym);
     const z = () => ({ txval: 0, iamt: 0, camt: 0, samt: 0 });
     const add = (t, v, s) => { t.txval += s * v.totals.taxable; t.iamt += s * v.totals.igst; t.camt += s * v.totals.cgst; t.samt += s * v.totals.sgst; };
-    const a = z(), b = z(), c = z(), d = z(), itcRcm = z(), itcOther = z(), ineligible = z(), reversal = z();
+    const a = z(), b = z(), c = z(), d = z(), eco = z(), itcRcm = z(), itcOther = z(), ineligible = z(), reversal = z();
     const interUnreg = {};
     [[sales, 1], [notes, -1]].forEach(([list, s]) => list.forEach(v => {
         if (v.kind === 'EXP' || v.kind === 'SEZ') add(b, v, s);
+        else if (v.totals.tax === 0 && (v.lines || []).length && v.lines.every(l => l.eco95)) add(eco, v, s);   // 3.1.1(ii): through a food app, s.9(5)
         else if (v.totals.tax === 0) add(c, v, s);
         else add(a, v, s);
         if (v.kind === 'B2C' && v.totals.inter) { const x = interUnreg[v.pos] ||= { pos: v.pos, txval: 0, iamt: 0 }; x.txval += s * v.totals.taxable; x.iamt += s * v.totals.igst; }
@@ -1692,7 +1713,7 @@ function gstr3b(ym) {
     const basis = has2b(ym) ? '2B' : 'books';
     const deferred = z();
     bills.forEach(v => {
-        if (v.rcm) { add(d, v, 1); add(itcRcm, v, 1); return; }
+        if (v.rcm) { add(d, v, 1); add(v.itc === false ? ineligible : itcRcm, v, 1); return; }
         if (v.itc === false) { add(ineligible, v, 1); return; }
         if (v.totals.tax && (basis === 'books' || !isRegistered(contactById(v.partyId)))) add(itcOther, v, 1);
     });
@@ -1702,15 +1723,24 @@ function gstr3b(ym) {
     });
     dns.forEach(v => { if (!v.rcm && v.itc !== false && v.totals.tax) add(reversal, v, 1); });
     const R = o => Object.fromEntries(Object.entries(o).map(([k, x]) => [k, r2(x)]));
+    // Rule 42: with both credit and no-credit / exempt supplies, common credit is reversed in the ratio of that turnover
+    const rule42 = z();
+    let ratio42 = 0;
+    if (co.profile.itcPolicy === 'mixed') {
+        const lineTot = (f) => sum(sales, v => sum((v.lines || []).filter(f), 'taxable')) - sum(notes, v => sum((v.lines || []).filter(f), 'taxable'));
+        const all = lineTot(() => true), no = lineTot(l => { const it = itemById(l.itemId); return it?.noItc || it?.exempt; });
+        ratio42 = all > 0 ? Math.min(1, Math.max(0, no / all)) : 0;
+        rule42.iamt = (itcOther.iamt + itcRcm.iamt) * ratio42; rule42.camt = (itcOther.camt + itcRcm.camt) * ratio42; rule42.samt = (itcOther.samt + itcRcm.samt) * ratio42;
+    }
     const itcAvail = R({ iamt: itcRcm.iamt + itcOther.iamt, camt: itcRcm.camt + itcOther.camt, samt: itcRcm.samt + itcOther.samt });
     // Credit left over from earlier months (what is still in the input ledgers at the end of last month)
     const prevEnd = lastDay(addMonths(ym, -1));
     const pend = itcPending(addMonths(ym, -1));
     const carryIn = R({ iamt: Math.max(0, balance(sysId('inIgst'), prevEnd) - pend.iamt), camt: Math.max(0, balance(sysId('inCgst'), prevEnd) - pend.camt), samt: Math.max(0, balance(sysId('inSgst'), prevEnd) - pend.samt) });
-    const itcNet = R({ iamt: itcAvail.iamt - reversal.iamt + carryIn.iamt, camt: itcAvail.camt - reversal.camt + carryIn.camt, samt: itcAvail.samt - reversal.samt + carryIn.samt });
+    const itcNet = R({ iamt: itcAvail.iamt - reversal.iamt - rule42.iamt + carryIn.iamt, camt: itcAvail.camt - reversal.camt - rule42.camt + carryIn.camt, samt: itcAvail.samt - reversal.samt - rule42.samt + carryIn.samt });
     const liab = R({ iamt: a.iamt + b.iamt, camt: a.camt, samt: a.samt });
     const rcmLiab = R({ iamt: d.iamt, camt: d.camt, samt: d.samt });
-    return { ym, basis, deferred: R(deferred), carryIn, a: R(a), b: R(b), c: R(c), d: R(d), interUnreg: Object.values(interUnreg).map(R), itcRcm: R(itcRcm), itcOther: R(itcOther), reversal: R(reversal), ineligible: R(ineligible), itcAvail, itcNet, liab, rcmLiab, setoff: setOff(liab, itcNet, rcmLiab) };
+    return { ym, basis, deferred: R(deferred), carryIn, a: R(a), b: R(b), c: R(c), d: R(d), eco: R(eco), rule42: R(rule42), ratio42, interUnreg: Object.values(interUnreg).map(R), itcRcm: R(itcRcm), itcOther: R(itcOther), reversal: R(reversal), ineligible: R(ineligible), itcAvail, itcNet, liab, rcmLiab, setoff: setOff(liab, itcNet, rcmLiab) };
 }
 // Rule 88A order: IGST credit first (IGST, then CGST/SGST); CGST credit → CGST then IGST; SGST credit → SGST then IGST. RCM is paid in cash.
 function setOff(liab, itc, rcm) {
@@ -1749,8 +1779,10 @@ function postSetOff(ym) {
     const cr = (k, amt) => amt && L.push({ acc: sysId(k), dr: 0, cr: amt });
     dr('outIgst', r2(u.iamt.iamt + u.camt.iamt + u.samt.iamt)); dr('outCgst', r2(u.iamt.camt + u.camt.camt)); dr('outSgst', r2(u.iamt.samt + u.samt.samt));
     cr('inIgst', r2(u.iamt.iamt + u.iamt.camt + u.iamt.samt)); cr('inCgst', r2(u.camt.camt + u.camt.iamt)); cr('inSgst', r2(u.samt.samt + u.samt.iamt));
+    const r42 = g.rule42, rev = r2(r42.iamt + r42.camt + r42.samt);
+    if (rev) { dr('itcRev', rev); cr('inIgst', r42.iamt); cr('inCgst', r42.camt); cr('inSgst', r42.samt); }
     if (L.length < 2) throw new Error('There is no input tax credit to set off for this month.');
-    return saveVoucher({ type: 'JV', date: lastDay(ym), jlines: L, narration: `GST input tax credit set off against output tax for ${ymLabel(ym)} (GSTR-3B, Rule 88A order)` }, { source: 'GSTR-3B set-off' });
+    return saveVoucher({ type: 'JV', date: lastDay(ym), jlines: L, narration: `GST input tax credit set off against output tax for ${ymLabel(ym)} (GSTR-3B, Rule 88A order)${rev ? `; common credit ${inr(rev)} reversed under Rule 42 (${(g.ratio42 * 100).toFixed(1)}% no-credit turnover)` : ''}` }, { source: 'GSTR-3B set-off' });
 }
 
 // ---------- e-invoice (INV-01 schema) and a TEST IRN ----------
@@ -1978,16 +2010,21 @@ function complianceItems(fy) {
     const hasTds = Boolean(co.profile.tan) || co.vouchers.some(v => v.tds?.amount);
     const hasTcs = co.vouchers.some(v => v.tcs?.amount) || co.contacts.some(c => c.tcsSection);
     const qrmp = co.profile.gstFreq === 'quarterly';
+    const comp = co.profile.gstType === 'composition';
     const tdsReg = taxRegister('tds', fy), tcsReg = taxRegister('tcs', fy);
     // QRMP GSTR-3B: the 22nd for these states, the 24th for the rest
     const day3b = ['22', '23', '24', '26', '27', '29', '30', '31', '32', '33', '34', '35', '36', '37'].includes(co.profile.state) ? '22' : '24';
     fyMonths(fy).forEach(ym => {
         const next = addMonths(ym, 1);
-        if (hasGst && !qrmp) {
+        if (hasGst && comp) {
+            const q = quarterOf(ym);
+            if (QUARTERS[q].at(-1) === Number(ym.slice(5))) add('CMP-08', `${q}-${fy}`, `${next}-18`, `CMP-08 composition tax · ${q} ending ${ymLabel(ym)}`, 'CGST Rule 62');
+        }
+        if (hasGst && !comp && !qrmp) {
             add('GSTR-1', ym, `${next}-11`, `GSTR-1 · ${ymLabel(ym)}`, 'CGST Act s.37');
             add('GSTR-3B', ym, `${next}-20`, `GSTR-3B · ${ymLabel(ym)}`, 'CGST Act s.39');
         }
-        if (hasGst && qrmp) {
+        if (hasGst && !comp && qrmp) {
             const q = quarterOf(ym), last = QUARTERS[q].at(-1) === Number(ym.slice(5));
             if (last) {
                 add('GSTR-1', `${q}-${fy}`, `${next}-13`, `GSTR-1 (quarterly) · ${q} ending ${ymLabel(ym)}`, 'CGST Act s.37 · QRMP');
@@ -2016,7 +2053,8 @@ function complianceItems(fy) {
         if (hasTcs) add('FORM-143', `${q}-${fy}`, returnDue(fy, q), `TCS return Form 143 (old 27EQ) · ${q}`, 'Income-tax Act 2025 s.397');
     });
     [['15%', `${fy}-06-15`], ['45%', `${fy}-09-15`], ['75%', `${fy}-12-15`], ['100%', `${fy + 1}-03-15`]].forEach(([p, d]) => add('ADV-TAX', `${p}-${fy}`, d, `Advance tax instalment (${p})`, 'Income-tax Act 2025'));
-    if (hasGst) add('GSTR-9', `FY-${fy}`, `${fy + 1}-12-31`, `GSTR-9 annual return · FY ${fyLabel(fy)}`, 'CGST Act s.44');
+    if (hasGst && comp) add('GSTR-4', `FY-${fy}`, `${fy + 1}-06-30`, `GSTR-4 composition annual return · FY ${fyLabel(fy)}`, 'CGST Act s.39(2)');
+    else if (hasGst) add('GSTR-9', `FY-${fy}`, `${fy + 1}-12-31`, `GSTR-9 annual return · FY ${fyLabel(fy)}${(Number(co.profile.aato) || 0) <= 20000000 ? ' (optional up to ₹2 crore)' : ''}`, 'CGST Act s.44');
     if (/Ltd/.test(co.profile.entity)) { add('MSME-1', `H1-${fy}`, `${fy}-10-31`, 'MSME-1 (Apr–Sep dues)', 'Companies Act s.405'); add('MSME-1', `H2-${fy}`, `${fy + 1}-04-30`, 'MSME-1 (Oct–Mar dues)', 'Companies Act s.405'); }
     const t = todayISO();
     items.forEach(i => { i.state = i.filed ? 'filed' : i.due < t ? 'overdue' : daysBetween(t, i.due) <= 7 ? 'soon' : 'upcoming'; });
@@ -2242,11 +2280,12 @@ function gstr3bJson(ym) {
     return {
         gstin: co.profile.gstin, ret_period: ym.slice(5) + ym.slice(0, 4),
         sup_details: { osup_det: t(g.a), osup_zero: t(g.b), osup_nil_exmp: t(g.c), isup_rev: t(g.d), osup_nongst: t({}) },
+        eco_dtls: { eco_sup: t({}), eco_reg_sup: t(g.eco) },
         inter_sup: { unreg_details: g.interUnreg.map(x => ({ pos: x.pos, txval: r2(x.txval), iamt: r2(x.iamt) })), comp_details: [], uin_details: [] },
         itc_elg: {
             itc_avl: [{ ty: 'IMPG', ...tx({}) }, { ty: 'IMPS', ...tx({}) }, { ty: 'ISRC', ...tx(g.itcRcm) }, { ty: 'ISD', ...tx({}) }, { ty: 'OTH', ...tx(g.itcOther) }],
-            itc_rev: [{ ty: 'RUL', ...tx({}) }, { ty: 'OTH', ...tx(g.reversal) }],
-            itc_net: tx({ iamt: g.itcAvail.iamt - g.reversal.iamt, camt: g.itcAvail.camt - g.reversal.camt, samt: g.itcAvail.samt - g.reversal.samt }),
+            itc_rev: [{ ty: 'RUL', ...tx(g.rule42) }, { ty: 'OTH', ...tx(g.reversal) }],
+            itc_net: tx({ iamt: g.itcAvail.iamt - g.reversal.iamt - g.rule42.iamt, camt: g.itcAvail.camt - g.reversal.camt - g.rule42.camt, samt: g.itcAvail.samt - g.reversal.samt - g.rule42.samt }),
             itc_inelg: [{ ty: 'RUL', ...tx(g.ineligible) }, { ty: 'OTH', ...tx({}) }]
         },
         inward_sup: { isup_details: [{ ty: 'GST', inter: 0, intra: 0 }, { ty: 'NONGST', inter: 0, intra: 0 }] }
@@ -2497,6 +2536,16 @@ const MANUAL = [
         <div class="man-warn"><b>Save your recovery code.</b> When the owner account is created you are shown a recovery code once. Write it down or download it — it is the only way to reset a forgotten password in this version.</div>
         <div class="man-tip"><b>Basic or Advanced:</b> the switch at the top right. Basic hides journals, notes, TDS, bank reconciliation and bill scanning, for people who only raise invoices and record money. Nothing is lost when you switch.</div>
         <div class="man-tip"><b>Trial:</b> a new workspace gets every Professional feature free for 14 days. After that it moves to the plan you choose, or to Starter (free).</div>`],
+    ['business', 'Business profile — rates and rules for your industry', `
+        <p>Every new company starts with <b>Business profile</b>. Choose what the business does (hotel, restaurant, trader, manufacturer, professional, clinic, school, transport, construction, salon / gym, tour operator, online seller, garments, jeweller, rentals…) and answer a few questions on size: turnover, employees, cash sales, inter-state or online sales, and for companies the paid-up capital and net worth.</p>
+        <p>The ERP then shows <b>your GST rates</b> (with HSN / SAC and whether input credit is allowed) and <b>the rules that apply to you</b>, marked Must, Option, Benefit or Info: GST registration, composition scheme, return frequency, GSTR-9 / 9C, e-invoicing, presumptive tax, tax audit, TDS duty, the 45-day MSME payment rule, small-company exemptions, CARO, CSR, PF, ESI, gratuity, bonus and Udyam.</p>
+        <p><b>Apply to my books</b> sets it up: the rate items are added, the GST scheme and return frequency are set, and the input-credit rule is applied to every new purchase:</p>
+        <ul style="margin-left:18px"><li><b>Credit claimed</b> — most traders, manufacturers and professionals.</li>
+        <li><b>No credit</b> — e.g. hotel rooms up to ₹7,500 a night, restaurants, salons and gyms (5% without credit), exempt health care and education. Every purchase, including reverse charge, is booked with its GST as cost and GSTR-3B claims nothing.</li>
+        <li><b>Credit with Rule 42 reversal</b> — when you make both kinds of supplies (e.g. rooms below and above ₹7,500). Each month the common credit × the share of no-credit / exempt turnover is reversed in GSTR-3B 4(B)(1) and posted with the set-off journal.</li></ul>
+        <p><b>Composition</b> (traders and manufacturers up to ₹1.5 crore at 1%, restaurants at 5%, service providers up to ₹50 lakh at 6%): invoices become bills of supply without GST, purchases carry no credit, and GST → <b>CMP-08 & GSTR-4</b> works out the quarterly tax, posts it and shows the annual return. The due dates change to CMP-08 and GSTR-4.</p>
+        <p>Food-app orders (Swiggy / Zomato) use their own item: the app pays the GST, so your bill shows none and it is reported in GSTR-3B table 3.1.1(ii).</p>
+        <div class="man-warn">These are the general rules (GST 2.0 rates from 22 September 2025, Income-tax Act 2025). Special notifications, state rules and exemptions can change the answer for a particular business — confirm with your CA before you file.</div>`],
     ['sales', 'Sales invoices', `
         <ol><li>Press <kbd>F8</kbd> (or <b>+ Invoice</b>). Choose the customer — use <b>+</b> to add a new one without leaving the invoice.</li>
         <li>The <b>place of supply</b> fills from the customer's state. Same state as yours: CGST + SGST. Different state: IGST. Foreign customer or SEZ unit: zero-rated (no tax under LUT, or IGST if you tick "with payment").</li>
@@ -2561,10 +2610,11 @@ const MANUAL = [
         <li><b>Pay salaries</b> from the bank or cash when you pay; Salary payable becomes nil.</li>
         <li><b>PF, ESI, PT & TDS</b> shows each month's dues and due dates (PF and ESI by the 15th, TDS by the 7th). Pay them from here; download the PF ECR text file and the Form 138 (old Form 24Q) annexure for the quarterly TDS return on salaries.</li></ol>`],
     ['connect', 'Connected dashboards (STAY BAY and Eco Pack)', `
+        <p>Each dashboard has its own company in the ERP — STAY BAY as a hotel, Eco Pack as a manufacturer — and never syncs into another company. Adding the sample companies creates both, connected: they use the dashboard's data if it is in this browser, otherwise built-in demo data (marked "demo"). Each dashboard also has a <b>We Create ERP</b> button that opens the ERP's connection page.</p>
         <p>Go to <b>Connected dashboards</b>. The ERP reads the dashboard's data from the same browser, or from a backup file you load (Backup → Download in the dashboard).</p>
         <ul style="margin-left:18px"><li><b>STAY BAY</b> — payroll only: employees and every month marked <i>Paid</i> in STAY BAY are posted as payroll journals and salary payments with PF, ESI, PT, TDS and advance recovery.</li>
         <li><b>Eco Pack</b> — the company profile, products (finished goods) and materials (raw materials) with opening stock, customers, dispatched orders as sales invoices with Eco Pack's own invoice numbers, customer payments as receipts, raw-material purchases as purchase bills, each production day as a production entry (materials consumed → finished goods at cost), paid machine repairs, and payroll.</li></ul>
-        <p>Press <b>Connect & sync</b> once. After that the ERP syncs again whenever you open the company; entries already brought in are never added twice. Each entry is marked with its source and recorded in the audit trail.</p>
+        <p>Press <b>Create a company for … and connect</b> once. After that the ERP syncs again whenever you open that company; entries already brought in are never added twice. Each entry is marked with its source and recorded in the audit trail.</p>
         <div class="man-warn">Eco Pack's stores register does not hold supplier GSTINs. Enter them on the connection card; purchase bills from a supplier are added (with input tax credit) once its GSTIN is known. Use <b>URD</b> for an unregistered supplier.</div>`],
     ['bank', 'Bank reconciliation', `
         <ol><li>Download the bank statement as CSV (Date, Description, Withdrawal, Deposit, Reference) and import it in <b>Bank reconciliation</b>.</li>
@@ -3173,35 +3223,55 @@ function autoSync() {
     const msgs = [];
     [['staybay', readStayBay, syncStayBay], ['ecopack', readEcoPack, syncEcoPack]].forEach(([k, read, sync]) => {
         const l = co.links[k];
-        if (!l?.auto || !read()) return;
-        try { const rep = sync(); if (Object.keys(rep.added).length) msgs.push(`${SOURCE_LABEL[k]}: ${reportText(rep)}`); } catch (e) { console.warn(e); }
+        const src = l?.auto && sourceOf(k, l);
+        if (!src) return;
+        try { const rep = sync(src); if (Object.keys(rep.added).length) msgs.push(`${SOURCE_LABEL[k]}: ${reportText(rep)}`); } catch (e) { console.warn(e); }
     });
     if (msgs.length) toast(`Synced — ${msgs.join(' · ')}`);
+}
+
+// Where a connected company's data comes from: the dashboard in this browser, a loaded backup, or the built-in demo
+const readSource = k => k === 'staybay' ? readStayBay() : readEcoPack();
+const sourceOf = (k, l) => l?.demo ? demoSource(k) : readSource(k);
+// Companies connected to a dashboard (each dashboard syncs only into its own company)
+function linkedCompanies(k) {
+    return meta.companies.filter(c => c.link === k || (c.link === undefined && loadCo(c.id)?.links?.[k])).map(c => ({ ...c, demo: Boolean(loadCo(c.id)?.links?.[k]?.demo) }));
 }
 
 // ---------- screen ----------
 function connectionsHtml() {
     const card = k => {
-        const S = SOURCES[k], l = linkOf(k), src = k === 'staybay' ? readStayBay() : readEcoPack();
+        const S = SOURCES[k], l = linkOf(k), src = sourceOf(k, l), real = readSource(k);
+        const head = `<div class="row" style="justify-content:space-between;align-items:flex-start"><div><h2 style="margin-bottom:4px">${esc(S.name)} ${l ? `<span class="badge good">Connected to this company</span>${l.demo ? ' <span class="badge warn">Demo data</span>' : ''}` : ''}</h2><p class="note">${esc(S.what)}</p></div>
+            <a class="btn btn-g btn-sm" href="${S.url}" target="_blank" rel="noopener">Open dashboard ↗</a></div>`;
+        const backup = `<label class="btn btn-s btn-sm" style="cursor:pointer">Load backup file<input type="file" accept=".json" hidden onchange="loadBackupFor('${k}', this)"></label>`;
+        if (!l) {
+            // This company is not the one for this dashboard: show where it syncs, or create its company
+            const others = linkedCompanies(k).filter(c => c.id !== co.id);
+            return `<div class="card">${head}<div class="note" style="margin:10px 0">${real ? `✓ ${SOURCE_LABEL[k]} data found (${esc(real.from)}).` : `No ${SOURCE_LABEL[k]} data in this browser yet — open the dashboard once here, or load its backup file.`} ${SOURCE_LABEL[k]} syncs only into its own company, never into ${esc(co.profile.name)}.</div>
+                ${others.length ? `<div class="row" style="flex-wrap:wrap;gap:8px;margin-bottom:8px">${others.map(c => `<button class="btn btn-s btn-sm" onclick="pickCompany('${c.id}');go('#/connect')">Open ${esc(c.name)}${c.demo ? ' (demo)' : ''} →</button>`).join('')}</div>` : ''}
+                <div class="row" style="margin-top:6px">${isAdmin() && (real || !others.length) ? `<button class="btn btn-p btn-sm" onclick="createLinkedCompany('${k}')">${real ? `Create a company for ${SOURCE_LABEL[k]} and connect` : `Create ${SOURCE_LABEL[k]} company with demo data`}</button>` : ''}${backup}</div></div>`;
+        }
         const counts = !src ? '' : k === 'staybay' ? `${src.employees.length} employees, ${new Set(src.employees.flatMap(e => Object.keys(e.payments || {}))).size} paid months` : `${(src.db.orders || []).filter(o => o.status === 'Dispatched').length} invoices, ${(src.db.moves || []).filter(m => m.kind === 'Purchase').length} purchases, ${(src.db.employees || []).length} employees`;
-        const needs = (l?.lastReport?.needs || []).filter(n => n.kind === 'vendorGstin' && !(l.vendorGstin || {})[n.name]);
-        return `<div class="card"><div class="row" style="justify-content:space-between;align-items:flex-start"><div><h2 style="margin-bottom:4px">${esc(S.name)} ${l ? '<span class="badge good">Connected</span>' : ''}</h2><p class="note">${esc(S.what)}</p></div>
-            <a class="btn btn-g btn-sm" href="${S.url}" target="_blank" rel="noopener">Open dashboard ↗</a></div>
-            <div class="note" style="margin:10px 0">${src ? `✓ Found data (${esc(src.from)}): ${esc(counts)}` : `No ${SOURCE_LABEL[k]} data in this browser. Open the dashboard on this computer and browser once, or load its backup file below.`}${l?.lastSync ? `<br>Last synced ${new Date(l.lastSync).toLocaleString('en-IN')} into <b>${esc(co.profile.name)}</b>.` : ''}</div>
-            ${needs.length ? `<div class="warns"><b>Supplier GSTINs needed.</b> Purchase bills from these suppliers are held back until you add their GSTIN (input GST can only be claimed from a registered supplier). Choose "Unregistered" if they really have no GSTIN.<div class="fg" style="margin-top:8px">${needs.map((n, i) => `<label class="f">${esc(n.name)} <span class="hint">${n.bills} bill(s)</span><input id="vg_${i}" data-name="${esc(n.name)}" maxlength="15" placeholder="GSTIN or URD" style="text-transform:uppercase"></label>`).join('')}</div>
+        const needs = (l.lastReport?.needs || []).filter(n => n.kind === 'vendorGstin' && !(l.vendorGstin || {})[n.name]);
+        return `<div class="card">${head}
+            <div class="note" style="margin:10px 0">${src ? `✓ Source: ${esc(src.from)} — ${esc(counts)}` : `No ${SOURCE_LABEL[k]} data in this browser. Open the dashboard on this computer and browser once, or load its backup file below.`}${l.lastSync ? `<br>Last synced ${new Date(l.lastSync).toLocaleString('en-IN')}.` : ''}</div>
+            ${l.demo && real && isAdmin() ? `<div class="warns">Your real ${SOURCE_LABEL[k]} data is in this browser. This company holds demo data — <a href="javascript:createLinkedCompany('${k}')">create a company for the real data</a> so the two never mix.</div>` : ''}
+            ${needs.length ? `<div class="warns"><b>Supplier GSTINs needed.</b> Purchase bills from these suppliers are held back until you add their GSTIN (input GST can only be claimed from a registered supplier). Type URD if a supplier really has no GSTIN.<div class="fg" style="margin-top:8px">${needs.map((n, i) => `<label class="f">${esc(n.name)} <span class="hint">${n.bills} bill(s)</span><input id="vg_${i}" data-name="${esc(n.name)}" maxlength="15" placeholder="GSTIN or URD" style="text-transform:uppercase"></label>`).join('')}</div>
                 <div class="row" style="margin-top:8px"><button class="btn btn-p btn-sm" onclick="saveVendorGstins()">Save & sync again</button>${l.sample ? '<button class="btn btn-g btn-sm" onclick="fillSampleGstins()">Use sample GSTINs (sample data only)</button>' : ''}</div></div>` : ''}
-            ${l?.lastReport?.failed?.length ? `<details><summary class="note" style="cursor:pointer">${l.lastReport.failed.length} record(s) not added — why</summary><div class="note">${l.lastReport.failed.map(esc).join('<br>')}</div></details>` : ''}
-            <div class="row" style="margin-top:10px">${canEdit() ? `<button class="btn btn-p" ${src ? '' : 'disabled'} onclick="runSync('${k}')">${l ? 'Sync now' : 'Connect & sync'}</button>` : ''}
-                <label class="btn btn-s btn-sm" style="cursor:pointer">Load backup file<input type="file" accept=".json" hidden onchange="loadBackupFor('${k}', this)"></label>
-                ${l ? `<label class="chk"><input type="checkbox" ${l.auto ? 'checked' : ''} onchange="linkOf('${k}').auto=this.checked;saveCo()"> Sync automatically when this company opens</label>` : ''}
-                ${k === 'staybay' && !l && isAdmin() ? `<button class="btn btn-g btn-sm" onclick="createLinkedCompany('staybay')">New company for STAY BAY</button>` : ''}${k === 'ecopack' && !l && isAdmin() ? `<button class="btn btn-g btn-sm" onclick="createLinkedCompany('ecopack')">New company for Eco Pack</button>` : ''}</div></div>`;
+            ${l.lastReport?.failed?.length ? `<details><summary class="note" style="cursor:pointer">${l.lastReport.failed.length} record(s) not added — why</summary><div class="note">${l.lastReport.failed.map(esc).join('<br>')}</div></details>` : ''}
+            <div class="row" style="margin-top:10px">${canEdit() ? `<button class="btn btn-p" ${src ? '' : 'disabled'} onclick="runSync('${k}')">Sync now</button>` : ''}${l.demo ? '' : backup}
+                <label class="chk"><input type="checkbox" ${l.auto ? 'checked' : ''} onchange="linkOf('${k}').auto=this.checked;saveCo()"> Sync automatically when this company opens</label></div></div>`;
     };
-    return `<p class="note" style="margin-bottom:12px">Data syncs into the company that is open now: <b>${esc(co.profile.name)}</b>. Connect STAY BAY to its own company and Eco Pack to its own company. Syncing again only adds what is new; nothing is ever posted twice.</p>${card('staybay')}${card('ecopack')}`;
+    return `<p class="note" style="margin-bottom:12px">Each dashboard has its own company in the ERP: STAY BAY (payroll) and Eco Pack (sales, purchases, production, payroll). Syncing again only adds what is new; nothing is ever posted twice. You are in <b>${esc(co.profile.name)}</b>.</p>${card('staybay')}${card('ecopack')}`;
 }
 function viewConnect() { $('#view').innerHTML = pageHead('Connected dashboards', 'Bring payroll from STAY BAY, and sales, purchases, production and payroll from Eco Pack, straight into the books.') + connectionsHtml(); }
 function runSync(k) {
     try {
-        const rep = k === 'staybay' ? syncStayBay() : syncEcoPack();
+        const l = linkOf(k);
+        if (!l) throw new Error(`${co.profile.name} is not connected to ${SOURCE_LABEL[k]}. Each dashboard syncs into its own company.`);
+        const src = sourceOf(k, l);
+        const rep = k === 'staybay' ? syncStayBay(src) : syncEcoPack(src);
         modal({ title: `Synced from ${SOURCE_LABEL[k]}`, body: `<p style="margin-bottom:10px">${esc(reportText(rep))}.</p>${Object.keys(rep.added).length ? `<ul style="margin-left:18px">${Object.entries(rep.added).map(([n, c]) => `<li>${c} ${esc(n)}</li>`).join('')}</ul>` : ''}${rep.needs.length ? `<div class="warns">${rep.needs.length} supplier(s) need a GSTIN before their bills are added — see the connection card.</div>` : ''}${rep.failed.length ? `<details style="margin-top:8px"><summary>${rep.failed.length} not added</summary><div class="note">${rep.failed.slice(0, 40).map(esc).join('<br>')}</div></details>` : ''}<p class="note" style="margin-top:10px">Every entry is posted to the ledgers, GST and statements and recorded in the audit trail.</p>`, foot: '<button class="btn btn-p" onclick="closeModal();route()">Done</button>' });
     } catch (e) { alert(e.message); }
 }
@@ -3226,13 +3296,14 @@ function fillSampleGstins() {
     (l.lastReport?.needs || []).forEach((n, i) => { l.vendorGstin[n.name] ||= makeGstin('33', `AAAFE${String(4100 + i * 7).padStart(4, '0')}K`); });
     saveCo(); runSync('ecopack');
 }
-function createLinkedCompany(k) {
-    if (limitReached('companies')) return upgradePrompt('More companies');
-    const S = k === 'staybay' ? readStayBay() : readEcoPack();
+// A company for a dashboard. demo: use the built-in demo data (when the dashboard's data is not in this browser).
+function buildLinkedCompany(k, demo) {
+    const S = demo ? demoSource(k) : readSource(k);
     let p;
     if (k === 'staybay') {
         const em = S?.employer || {};
         p = { name: em.name || 'STAY BAY Business Hotels', legalName: em.name || '', entity: 'Proprietorship', pan: panValid(em.pan) ? em.pan : '', tan: /^[A-Z]{4}\d{5}[A-Z]$/.test(em.tan || '') ? em.tan : '', state: '33', address: em.address || '', city: em.place || '' };
+        if (demo) Object.assign(p, { pan: 'AKXPS4821L', gstin: makeGstin('33', 'AKXPS4821L'), tan: 'CHES12345F', phone: '9840098400' });
         const months = (S?.employees || []).flatMap(e => Object.keys(e.payments || {})).sort();
         p.booksFrom = `${fyOf((months[0] || todayISO().slice(0, 7)) + '-01')}-04-01`;
     } else {
@@ -3241,14 +3312,41 @@ function createLinkedCompany(k) {
         p = { name: c.name || 'Eco Pack Private Limited', legalName: c.name || '', entity: 'Private Ltd', gstin: gstinValid(c.gstin || '') ? c.gstin : '', state: c.stateCode || '33', address: c.address || '', city: 'Chennai', booksFrom: `${fyOf(first)}-04-01`, aato: 60000000 };
         if (p.gstin) p.pan = p.gstin.slice(2, 12);
     }
+    if (demo) p.name += ' (demo)';
     const c = newCompanyData(p);
     co = c;
-    meta.companies.push({ id: c.id, name: p.name, gstin: p.gstin || '' });
-    audit('Company created', { entity: 'Company', ref: p.name, after: `For the ${SOURCE_LABEL[k]} connection` });
-    co.links = { [k]: { auto: true, vendorGstin: {} } };
+    meta.companies.push({ id: c.id, name: p.name, gstin: p.gstin || '', link: k });
+    audit('Company created', { entity: 'Company', ref: p.name, after: `For the ${SOURCE_LABEL[k]} connection${demo ? ' (demo data)' : ''}` });
+    co.links = { [k]: { auto: true, vendorGstin: { ...(S?.vendorGstin || {}) }, demo: Boolean(demo) } };
+    if (demo) {   // a funded bank account so the demo payments have money to come from
+        const bank = saveAccount({ name: k === 'staybay' ? 'Indian Bank Current A/c' : 'IOB Current A/c', group: 'bank', openDr: k === 'staybay' ? 2500000 : 4000000, openCr: 0 });
+        sysAcc('capital').openCr = r2((Number(sysAcc('capital').openCr) || 0) + bank.openDr);
+        co.links[k].bank = bank.id;
+    }
+    // What kind of business it is, so the right GST, credit and compliance rules apply from day one
+    const n = k === 'staybay' ? (S?.employees || []).length : (S?.db?.employees || []).length;
+    applyBusinessProfile({ ...bizDefaults(), ...LINKED_BIZ[k], employees: n || LINKED_BIZ[k].employees, ...(demo ? {} : { turnoverLast: 0, turnoverExp: 0 }) }, { from: p.booksFrom });
+    let rep = null;
+    if (S) rep = k === 'staybay' ? syncStayBay(S) : syncEcoPack(S);
     saveCo(); saveMeta();
-    state.fy = defaultFy();
-    runSync(k);
+    return { company: c, rep };
+}
+function createLinkedCompany(k) {
+    if (limitReached('companies')) return upgradePrompt('More companies');
+    const real = readSource(k);
+    try {
+        buildLinkedCompany(k, !real);
+        state.fy = defaultFy();
+        go('#/connect');
+        toast(`${co.profile.name} created and connected${real ? '' : ' with demo data'}.`);
+    } catch (e) { alert(e.message); }
+}
+// The sample workspace: the sample trading company plus STAY BAY and Eco Pack, each in its own connected company
+function createSampleWorkspace() {
+    const saved = co;
+    createSampleCompany();
+    ['staybay', 'ecopack'].forEach(k => { try { buildLinkedCompany(k, !readSource(k)); } catch (e) { console.warn(k, e); } });
+    co = saved; ver++;
 }
 
 </script>
@@ -3362,7 +3460,7 @@ function showAuth(msg = '') {
             <label class="f">Username<input id="a_user" required autocomplete="username"></label>
             <label class="f">Password <span class="hint">At least ${MIN_PASSWORD} characters</span><input id="a_pass" type="password" autocomplete="new-password"></label>
             <label class="f">Type the password again<input id="a_pass2" type="password" autocomplete="new-password"></label>
-            <label class="chk"><input type="checkbox" id="a_sample" checked> Add a sample company with a few months of entries to try it out</label></div>`
+            <label class="chk"><input type="checkbox" id="a_sample" checked> Add sample companies to try it out (a trading company, plus STAY BAY and Eco Pack connected to their dashboards)</label></div>`
         : `<h2>Sign in</h2><p class="lead">${esc(msg) || 'Welcome back.'}</p>
             <div class="fg" style="grid-template-columns:1fr">
             <label class="f">Username<input id="a_user" autocomplete="username" autofocus></label>
@@ -3392,7 +3490,7 @@ function setupOwner() {
     auditMeta('Owner account created', { entity: 'User', ref: user });
     const code = setRecovery(me);
     saveMeta();
-    if (chk('a_sample')) createSampleCompany();
+    if (chk('a_sample')) createSampleWorkspace();
     enterApp();
     showRecoveryCode(code, 'This is your recovery code. If you ever forget your username or password, use it on the sign-in screen under "Forgot username or password?". It is shown only once.');
 }
@@ -3577,6 +3675,7 @@ async function changePassword() {
 const ROUTES = [
     [/^#\/companies$/, () => viewCompanies(), true],
     [/^#\/dashboard$/, () => viewDashboard()],
+    [/^#\/business$/, () => viewBusiness()],
     [/^#\/(sales|purchases|notes|receipts|payments|journals)$/, m => viewVoucherList(m[1])],
     [/^#\/new\/(SI|PB|CN|DN|RC|PY|JV|CT|SJ)$/, m => viewVoucherForm({ type: m[1] })],
     [/^#\/edit\/(.+)$/, m => viewVoucherForm(vById(m[1]))],
@@ -3587,7 +3686,7 @@ const ROUTES = [
     [/^#\/scan$/, () => viewScan()],
     [/^#\/reports$/, () => viewReports()],
     [/^#\/report\/([\w-]+)$/, m => viewReport(m[1])],
-    [/^#\/gst(?:\/(\w+))?$/, m => viewGst(m[1] || 'r1')],
+    [/^#\/gst(?:\/(\w+))?$/, m => viewGst(m[1] || 'plan')],
     [/^#\/tds$/, () => viewTds()],
     [/^#\/bank$/, () => viewBank()],
     [/^#\/calendar$/, () => viewCalendar()],
@@ -3628,6 +3727,7 @@ function renderChrome() {
         ['Overview'],
         ['#/dashboard', 'home', 'Dashboard'],
         ['#/companies', 'building', 'All companies'],
+        ['#/business', 'shield', 'Business profile'],
         ['Transactions'],
         ['#/sales', 'file', 'Sales', 'F8'],
         ['#/purchases', 'cart', 'Purchases', 'F9'],
@@ -3743,7 +3843,7 @@ function viewCompanies() {
         return out;
     }).join('');
     $('#view').innerHTML = pageHead('All companies', 'Your practice workspace: every company you look after, with its filing status. Open one to work in it.',
-        isAdmin() ? `<button class="btn btn-s" onclick="if (limitReached('companies')) return upgradePrompt('More companies'); createSampleCompany(); viewCompanies()">+ Sample company</button><button class="btn btn-p" onclick="if (limitReached('companies')) return upgradePrompt('More companies'); companyForm()">+ New company</button>` : '')
+        isAdmin() ? `<button class="btn btn-s" onclick="if (limitReached('companies')) return upgradePrompt('More companies'); createSampleWorkspace(); viewCompanies()">+ Sample companies</button><button class="btn btn-p" onclick="if (limitReached('companies')) return upgradePrompt('More companies'); companyForm()">+ New company</button>` : '')
         + (cards ? `<div class="grid g3">${cards}</div>` : `<div class="empty">No companies yet. ${isAdmin() ? 'Create your first company to begin.' : 'Ask the owner to give you access.'}</div>`);
 }
 function pickCompany(id) {
@@ -3801,8 +3901,8 @@ function companyForm(existing) {
                     meta.companies.push({ id: c.id, name: np.name, gstin: np.gstin });
                     saveCo(); saveMeta(); closeModal();
                     state.fy = defaultFy();
-                    toast('Company created. Add a bank account and opening balances in Chart of accounts.');
-                    go('#/dashboard');
+                    toast('Company created. Now tell the ERP about the business so it applies the right rates and rules.');
+                    go('#/business');
                 }
             };
         }
@@ -3810,6 +3910,12 @@ function companyForm(existing) {
 }
 
 // ---------- dashboard ----------
+function bizBanner() {
+    const b = co.profile.biz;
+    if (!b) return canEdit() ? `<div class="warns" style="display:flex;align-items:center;gap:12px;justify-content:space-between;flex-wrap:wrap"><span><b>Tell us about your business.</b> The ERP will apply the right GST rates, input credit rules, returns and tax rules for your industry and size.</span><a class="btn btn-p btn-sm" href="#/business">Set up business profile</a></div>` : '';
+    const must = businessRules(b).filter(r => r.level === 'must').length;
+    return `<div class="note" style="margin:-4px 0 12px"><a href="#/business">${esc(INDUSTRIES[b.industry]?.icon || '')} ${esc(INDUSTRIES[b.industry]?.name || '')}</a> · ${co.profile.gstType === 'composition' ? `composition ${co.profile.compRate}%` : 'regular GST'} · input credit ${{ full: 'claimed', none: 'not claimed', mixed: 'with Rule 42 reversal' }[co.profile.itcPolicy || 'full']} · ${must} rules apply</div>`;
+}
 function viewDashboard() {
     const t = todayISO(), ym = ymOf(t);
     const fy = state.fy, from = fyStart(fy) < co.profile.booksFrom ? co.profile.booksFrom : fyStart(fy), to = fyEnd(fy) < t ? fyEnd(fy) : t;
@@ -3827,7 +3933,7 @@ function viewDashboard() {
     const recent = [...co.vouchers].sort((a, b) => (b.created || '').localeCompare(a.created || '')).slice(0, 8);
     $('#view').innerHTML = pageHead(`Good ${new Date().getHours() < 12 ? 'morning' : new Date().getHours() < 17 ? 'afternoon' : 'evening'}, ${me.name.split(' ')[0]}`, `${esc(co.profile.name)} · FY ${fyLabel(fy)} · ${fmtDate(t)}`,
         canEdit() ? `<a class="btn btn-s adv" href="#/scan">${ic('cam')} Scan a bill</a><a class="btn btn-s" href="#/new/RC">Receipt <kbd>F6</kbd></a><a class="btn btn-s" href="#/new/PB">Bill <kbd>F9</kbd></a><a class="btn btn-p" href="#/new/SI">${ic('plus')} Invoice <kbd>F8</kbd></a>` : '')
-        + recBanner + `<div class="grid g4" style="margin-bottom:16px">
+        + recBanner + bizBanner() + `<div class="grid g4" style="margin-bottom:16px">
             ${kpi('To collect (receivables)', inr0(recv), overdue.length ? `${overdue.length} invoice(s) overdue` : 'Nothing overdue', '#0f9d63')}
             ${kpi('To pay (payables)', inr0(pay), `${co.contacts.filter(c => c.msme && -balance(c.id) > 0).length} MSME supplier(s) with dues`, '#c62828')}
             ${kpi('Cash & bank', inr0(cash), `${cashBankAccounts().length} account(s)`, '#0369a1')}
@@ -4906,13 +5012,18 @@ function viewGst(tab) {
     if (!months.includes(gstMonth)) gstMonth = months.at(-1) || ymOf(todayISO());
     const ym = gstMonth;
     const filed = t => co.filings.find(f => f.type === t && (f.period === ym || f.period === `${quarterOf(ym)}-${fyOf(ym + '-01')}`));
-    const tabs = [['plan', 'This month: what to do'], ['r1', 'GSTR-1'], ['2b', 'GSTR-2B / IMS'], ['r3b', 'GSTR-3B'], ['gstr9', 'GSTR-9 annual'], ['ein', 'e-Invoice & e-Way bill'], ['health', 'Pre-filing check']];
+    const comp = co.profile.gstType === 'composition';
+    if (comp && ['r1', '2b', 'r3b', 'gstr9', 'plan'].includes(tab)) tab = 'cmp';
+    const tabs = comp ? [['cmp', 'CMP-08 & GSTR-4'], ['ein', 'e-Way bill'], ['health', 'Pre-filing check']]
+        : [['plan', 'This month: what to do'], ['r1', 'GSTR-1'], ['2b', 'GSTR-2B / IMS'], ['r3b', 'GSTR-3B'], ['gstr9', 'GSTR-9 annual'], ['ein', 'e-Invoice & e-Way bill'], ['health', 'Pre-filing check']];
     const head = pageHead('GST', `Returns are built from your invoices and bills. ${co.profile.gstin ? `GSTIN ${esc(co.profile.gstin)}` : '<b>Add your GSTIN in Settings.</b>'}`, `<select onchange="gstMonth=this.value;route()">${months.map(m => opt(m, ymLabel(m), ym)).join('')}</select>`)
         + `<div class="tabs">${tabs.map(([k, l]) => `<a href="#/gst/${k}" class="${tab === k ? 'on' : ''}">${l}</a>`).join('')}</div>`;
     let body = '';
     const sumRow = (label, o) => `<tr><td>${label}</td>${amtCell(o.txval ?? '')}${amtCell(o.iamt)}${amtCell(o.camt)}${amtCell(o.samt)}</tr>`;
     const steps = (list) => `<ol class="steps">${list.map(x => `<li>${x}</li>`).join('')}</ol>`;
-    if (tab === 'plan') {
+    if (tab === 'cmp') {
+        body = compositionHtml();
+    } else if (tab === 'plan') {
         const A = gstAdvice(ym);
         const lv = { bad: 'bad', warn: 'warn', info: '', good: '' };
         body = `<div class="card"><h2>GST for ${ymLabel(ym)} — step by step</h2>${A.map(a => `<a class="alert ${lv[a.level]}" href="${a.route}" style="text-decoration:none;color:inherit;align-items:flex-start"><span class="dot" ${a.level === 'good' ? 'style="background:var(--good)"' : ''}></span><span class="t"><b>${esc(a.text)}</b><small style="white-space:normal">${esc(a.how)}</small></span></a>`).join('') || '<p class="note">Nothing to do for this month.</p>'}</div>
@@ -4940,10 +5051,10 @@ function viewGst(tab) {
             ${filed('GSTR-3B') ? '' : steps(['On the portal, open GSTR-3B for the period. Outward tax (3.1) is filled from your GSTR-1 and locked; credit (4) is filled from GSTR-2B.', 'Compare each box with this screen. Change table 4 if needed (for example credit held back here because it is not in 2B).', `Create the challan for the cash part (${inr(s.totalCash)}), pay it, then <b>Offset liability</b> and file with DSC / EVC.`, 'Here: press <b>Post set-off journal</b>, record the cash payment with <b>Pay GST</b>, and <b>Mark as filed</b> with the ARN.'])}
             <p class="note" style="margin:8px 0">The GST portal does not accept a GSTR-3B file upload from taxpayers — it fills the return for you. The JSON is for GST Suvidha Providers and tax-professional software.</p><div id="g3T">
             <h2>3.1 Outward and inward supplies liable to reverse charge</h2><div class="tw"><table class="t"><thead><tr><th>Nature</th><th class="n">Taxable</th><th class="n">IGST</th><th class="n">CGST</th><th class="n">SGST</th></tr></thead><tbody>
-            ${sumRow('(a) Outward taxable supplies', g.a)}${sumRow('(b) Zero-rated (export / SEZ)', g.b)}${sumRow('(c) Nil-rated / exempt', g.c)}${sumRow('(d) Inward supplies under reverse charge', g.d)}</tbody></table></div>
+            ${sumRow('(a) Outward taxable supplies', g.a)}${sumRow('(b) Zero-rated (export / SEZ)', g.b)}${sumRow('(c) Nil-rated / exempt', g.c)}${g.eco.txval ? sumRow('3.1.1(ii) Supplies through a food app / e-commerce operator, tax paid by the operator (s.9(5))', g.eco) : ''}${sumRow('(d) Inward supplies under reverse charge', g.d)}</tbody></table></div>
             ${g.interUnreg.length ? `<h2 style="margin-top:14px">3.2 Inter-state supplies to unregistered persons</h2><div class="tw"><table class="t"><thead><tr><th>Place of supply</th><th class="n">Taxable</th><th class="n">IGST</th></tr></thead><tbody>${g.interUnreg.map(x => `<tr><td>${esc(stateName(x.pos))}</td>${amtCell(x.txval)}${amtCell(x.iamt)}</tr>`).join('')}</tbody></table></div>` : ''}
             <h2 style="margin-top:14px">4. Eligible ITC</h2><div class="tw"><table class="t"><thead><tr><th>Details</th><th class="n"></th><th class="n">IGST</th><th class="n">CGST</th><th class="n">SGST</th></tr></thead><tbody>
-            ${sumRow('A(3) Inward supplies under reverse charge', { ...g.itcRcm, txval: '' })}${sumRow(`A(5) All other ITC${g.basis === '2B' ? ' (as per GSTR-2B)' : ''}`, { ...g.itcOther, txval: '' })}${sumRow('B(2) Reversed (debit notes / returns)', { ...g.reversal, txval: '' })}${sumRow('Credit brought forward from earlier months', { ...g.carryIn, txval: '' })}${sumRow('C. Net ITC available', { ...g.itcNet, txval: '' })}${sumRow('D. Ineligible ITC (section 17(5))', { ...g.ineligible, txval: '' })}</tbody></table></div>
+            ${sumRow('A(3) Inward supplies under reverse charge', { ...g.itcRcm, txval: '' })}${sumRow(`A(5) All other ITC${g.basis === '2B' ? ' (as per GSTR-2B)' : ''}`, { ...g.itcOther, txval: '' })}${g.ratio42 ? sumRow(`B(1) Reversed under Rule 42 (common credit × ${(g.ratio42 * 100).toFixed(1)}% no-credit / exempt turnover)`, { ...g.rule42, txval: '' }) : ''}${sumRow('B(2) Reversed (debit notes / returns)', { ...g.reversal, txval: '' })}${sumRow('Credit brought forward from earlier months', { ...g.carryIn, txval: '' })}${sumRow('C. Net ITC available', { ...g.itcNet, txval: '' })}${sumRow('D. Ineligible ITC (section 17(5))', { ...g.ineligible, txval: '' })}</tbody></table></div>
             <h2 style="margin-top:14px">6.1 Payment of tax</h2><div class="tw"><table class="t"><thead><tr><th></th><th class="n">IGST</th><th class="n">CGST</th><th class="n">SGST</th></tr></thead><tbody>
             <tr><td>Tax payable (other than reverse charge)</td>${amtCell(g.liab.iamt)}${amtCell(g.liab.camt)}${amtCell(g.liab.samt)}</tr>
             <tr><td>Paid through ITC</td>${amtCell(s.use.iamt.iamt + s.use.camt.iamt + s.use.samt.iamt)}${amtCell(s.use.iamt.camt + s.use.camt.camt)}${amtCell(s.use.iamt.samt + s.use.samt.samt)}</tr>
@@ -5250,7 +5361,7 @@ function viewSettings(tab) {
             ${sel('gstFreq', 'Return filing', [['monthly', 'Monthly GSTR-1 and GSTR-3B'], ['quarterly', 'Quarterly — QRMP scheme (turnover up to ₹5 crore)']])}
             ${fld('aato', 'Last year turnover (₹)', 'Above ₹5 crore: e-invoicing; ₹10 crore+: 30-day reporting limit', 'number')}
             ${fld('lutNo', 'LUT reference (ARN)', 'For exports / SEZ without IGST')}${fld('lutTill', 'LUT valid till', '', 'date')}
-            </div><p class="note" style="margin-top:10px">${p.gstType === 'composition' ? 'Composition: sales print as "Bill of Supply" with no GST, and purchases carry no input credit. File CMP-08 quarterly and GSTR-4 yearly.' : 'Regular: tax invoices with GST; input credit on eligible purchases.'}</p></div>
+            </div><p class="note" style="margin-top:10px">${p.gstType === 'composition' ? `Composition at ${p.compRate || 1}%: sales print as "Bill of Supply" with no GST, and purchases carry no input credit. File CMP-08 quarterly and GSTR-4 yearly.` : `Regular: tax invoices with GST; input credit ${{ full: 'on eligible purchases', none: 'not claimed (your supplies are without credit)', mixed: 'claimed with Rule 42 reversal of common credit' }[p.itcPolicy || 'full']}.`} The <a href="#/business">Business profile</a> works these out from your industry and size.</p></div>
             <div class="card"><h2>TDS / TCS (deductor details for returns)</h2><div class="fg">
             ${fld('tan', 'TAN', 'e.g. CHEA12345B', 'text', 'maxlength="10" style="text-transform:uppercase"')}
             ${sel('deductorType', 'Type of deductor', [['company', 'Company'], ['firm', 'Firm / LLP'], ['individual', 'Individual / HUF (audited)'], ['aop', 'AOP / BOI / Trust'], ['govt', 'Government']])}
@@ -5484,6 +5595,501 @@ function gstr9Html(fy) {
 }
 
 </script>
+<script>/* js/business.js */
+'use strict';
+// ===================== We Create ERP · business profile =====================
+// The ERP first learns what the business does and how big it is, then works out which GST rates, input credit
+// rules, returns, income-tax, company-law and labour rules apply — and sets the books up for them.
+// Rates as per GST 2.0 (from 22 Sep 2025) and the Income-tax Act 2025 (old 1961 section numbers shown in brackets).
+// These are the general rules; special cases (notifications, exemptions, state rules) should be confirmed with a CA.
+
+// Supplies: { name, hsn, rate, itc: input credit allowed on this supply, type, note, exempt, eco95 }
+const sup = (name, hsn, rate, itc, note = '', x = {}) => ({ name, hsn, rate, itc, type: String(hsn).startsWith('99') ? 'service' : 'goods', note, ...x });
+
+const INDUSTRIES = {
+    hotel: {
+        name: 'Hotel, lodge or homestay', icon: '🏨', sells: 'services', comp: 'services',
+        q: ['maxTariff', 'hasRestaurant', 'specifiedOpt', 'hallHire'],
+        supplies: b => {
+            const hi = Number(b.maxTariff) > 7500, spec = hi || b.specifiedOpt;
+            const L = [sup('Room – tariff up to ₹7,500 a night', '996311', 5, false, 'GST 2.0: 5% without input credit. The rate depends on the amount actually charged per room per night (not a declared tariff).')];
+            if (hi) L.push(sup('Room – tariff above ₹7,500 a night', '996311', 18, true, '18% with input credit.'));
+            if (b.hasRestaurant) L.push(spec
+                ? sup('Restaurant in the hotel (specified premises)', '996331', 18, true, 'A hotel that charged above ₹7,500 for any room last year (or opted in) is "specified premises": its restaurant charges 18% with credit.')
+                : sup('Restaurant in the hotel', '996331', 5, false, '5% without input credit (not specified premises).'));
+            if (b.hallHire) L.push(sup('Hall / room hire for meetings (no food)', '997212', 18, true));
+            if (b.hasRestaurant) L.push(sup('Banquet / outdoor catering', '996334', spec ? 18 : 5, spec, spec ? '18% with credit in specified premises.' : '5% without credit.'));
+            return L;
+        },
+        rules: b => [
+            ['Industry', 'info', 'Room rate decides GST', 'Every bill is taxed by the price per room per night: up to ₹7,500 → 5% without input credit; above ₹7,500 → 18% with credit. There is no longer an exemption below ₹1,000.'],
+            itcPolicyOf(b) === 'mixed'
+                ? ['Industry', 'must', 'Mixed supplies: reverse common credit (Rule 42)', 'You make both 5%-without-credit and 18%-with-credit supplies (rooms above ₹7,500, hall hire, or a restaurant in specified premises). Credit on purchases used only for 18% supplies can be claimed; credit on common purchases is reversed in proportion to the 5% turnover every month. The ERP calculates this in GSTR-3B table 4(B)(1).']
+                : ['Industry', 'must', 'No input tax credit', 'All your supplies are at 5% without credit, so GST paid on purchases (including reverse charge) cannot be claimed; it becomes part of the cost. The ERP marks every purchase "credit not eligible" automatically.'],
+            ['Industry', 'option', 'Specified premises declaration', 'To charge 18% with credit on the restaurant even with rooms below ₹7,500, file the opt-in declaration on the GST portal between 1 January and 31 March for the next year.'],
+            ['Industry', 'info', 'TDS by corporate guests', 'Companies that book rooms regularly deduct TDS on rent (10%, old 194-I). Record it as TDS receivable when you get the payment and match it with Form 26AS / AIS before filing your return.'],
+            ['Industry', 'info', 'Licences', 'Trade licence, fire NOC, police (Form C for foreign guests), FSSAI for food, and a bar licence if liquor is served (liquor is outside GST; state VAT applies).']
+        ]
+    },
+    restaurant: {
+        name: 'Restaurant, café, sweet shop or cloud kitchen', icon: '🍽', sells: 'services', comp: 'restaurant',
+        q: ['aggregator', 'inSpecified'],
+        supplies: b => [
+            b.inSpecified ? sup('Food & beverages (in specified premises)', '996331', 18, true, '18% with credit: restaurant inside a hotel that charged above ₹7,500 for a room.')
+                : sup('Food & beverages – dine-in / takeaway / delivery', '996331', 5, false, '5% without input credit.'),
+            ...(b.aggregator ? [sup('Orders through Swiggy / Zomato', '996331', 5, false, 'The app collects and pays this GST under section 9(5); your invoice to the app shows no tax. Reported separately in GSTR-1 and GSTR-3B table 3.1.1.', { eco95: true })] : []),
+            sup('Outdoor catering', '996334', b.inSpecified ? 18 : 5, Boolean(b.inSpecified))
+        ],
+        rules: b => [
+            ['Industry', 'must', 'No input tax credit', 'Restaurant service at 5% is without credit: GST on rent, ingredients, equipment and reverse charge is a cost. The ERP marks purchases "credit not eligible" automatically.'],
+            ...(b.aggregator ? [['Industry', 'info', 'Food apps pay the GST', 'Swiggy / Zomato collect 5% from customers and pay it themselves (section 9(5)). You still report these sales (without tax) — use the "Orders through Swiggy / Zomato" item so they land in the right table.']] : []),
+            ['Industry', 'info', 'Licences', 'FSSAI registration or licence (by turnover), trade licence, fire NOC; liquor is outside GST (state VAT and excise).']
+        ]
+    },
+    trader: {
+        name: 'Shop, trader or wholesaler (goods)', icon: '🛒', sells: 'goods', comp: 'goods', q: ['b2bShare'],
+        supplies: () => [sup('Goods – standard rate', '8536', 18, true, 'Most goods are 18% after GST 2.0; luxury and sin goods 40%. Set the HSN and rate on each item.', { ref: true }), sup('Goods – merit rate (daily-use items)', '1905', 5, true, 'Food items, essentials and many daily-use goods are 5%; fresh milk, vegetables and unbranded cereals are nil.', { ref: true })],
+        rules: () => [['Industry', 'info', 'E-way bills', 'Needed before goods worth above ₹50,000 move (some states set a higher limit within the state). The ERP reminds you on invoices above that value.']]
+    },
+    manufacturer: {
+        name: 'Manufacturer or factory', icon: '🏭', sells: 'goods', comp: 'goods', q: ['excludedGoods', 'b2bShare', 'investment'],
+        supplies: () => [sup('Finished goods – standard rate', '3923', 18, true, 'Set HSN and rate on each product.', { ref: true })],
+        rules: b => [
+            ['Industry', 'info', 'Production and costing', 'Record production (materials consumed → finished goods) so stock is valued at cost and the P&L shows cost of materials consumed and change in inventories (Schedule III).'],
+            ['Industry', 'info', 'Job work', `Goods sent to a job worker: file ITC-04 ${nz(b.turnoverLast) > 50000000 ? 'half-yearly (25 Oct, 25 Apr)' : 'yearly (25 April)'}; inputs not returned within 1 year (capital goods 3 years) are treated as supplied.`],
+            ['Industry', 'info', 'E-way bills', 'Needed for every movement of goods above ₹50,000, including to job workers.']
+        ]
+    },
+    professional: {
+        name: 'Professional or consultant (CA, IT, architect, freelancer, advocate)', icon: '💼', sells: 'services', comp: 'services', presumptive: 'profession', q: ['advocate', 'exports'],
+        supplies: b => [
+            b.advocate ? sup('Legal services to a business (reverse charge)', '998212', 18, true, 'The business client pays the GST under reverse charge; your invoice shows no tax.', { rcmOut: true })
+                : sup('Professional / consulting services', '998311', 18, true),
+            ...(b.exports ? [sup('Export of services (under LUT)', '998311', 18, true, 'Zero-rated: no GST under LUT if paid in foreign currency.')] : [])
+        ],
+        rules: b => [
+            ...(b.advocate ? [['Industry', 'info', 'Advocates do not register for GST', 'Legal services to businesses are under reverse charge (the client pays); services to individuals are exempt. You usually need no GST registration.']] : []),
+            ...(b.exports ? [['Industry', 'must', 'LUT for exports', 'File the LUT (GST RFD-11) every year before the first export invoice, so exports go out without IGST.']] : [])
+        ]
+    },
+    healthcare: {
+        name: 'Clinic, hospital, diagnostic lab or pharmacy', icon: '🏥', sells: 'both', comp: null, q: ['pharmacy', 'roomsAbove5000'],
+        supplies: b => [
+            sup('Health care services (doctor, hospital, diagnostics)', '999311', 0, false, 'Exempt: no GST charged, no input credit.', { exempt: true }),
+            ...(b.roomsAbove5000 ? [sup('Hospital room above ₹5,000 a day (non-ICU)', '999311', 5, false, '5% without input credit.')] : []),
+            ...(b.pharmacy ? [sup('Medicines (pharmacy)', '3004', 5, true, 'Most medicines are 5% after GST 2.0 (some life-saving drugs nil).')] : [])
+        ],
+        rules: b => [['Industry', 'must', b.pharmacy ? 'Mixed supplies: reverse common credit (Rule 42)' : 'No input tax credit', b.pharmacy ? 'Credit on medicines bought for the pharmacy is claimed; credit on common costs is reversed in proportion to exempt health-care turnover each month.' : 'Health care is exempt, so GST on purchases cannot be claimed. A hospital with only exempt services need not register for GST.']]
+    },
+    education: {
+        name: 'School, college or coaching centre', icon: '🎓', sells: 'services', comp: 'services', q: ['coaching'],
+        supplies: b => [sup('School education (pre-school to higher secondary, recognised courses)', '999210', 0, false, 'Exempt.', { exempt: true }), ...(b.coaching ? [sup('Coaching / training', '999293', 18, true)] : [])],
+        rules: b => [['Industry', 'must', b.coaching ? 'Mixed supplies: reverse common credit (Rule 42)' : 'No input tax credit', b.coaching ? 'Credit on common costs is reversed in proportion to exempt education turnover.' : 'Recognised education is exempt: no GST on fees and no credit on purchases.']]
+    },
+    transport: {
+        name: 'Transport (goods transport agency, cabs, buses)', icon: '🚚', sells: 'services', comp: 'services', presumptive: 'transport', q: ['gtaOption', 'vehicles'],
+        supplies: b => [
+            b.gtaOption === 'fwd18' ? sup('Goods transport (GTA) – forward charge', '996511', 18, true, '18% with credit (opted).')
+                : b.gtaOption === 'fwd5' ? sup('Goods transport (GTA) – forward charge', '996511', 5, false, '5% without credit (opted).')
+                : sup('Goods transport (GTA) – customer pays (reverse charge)', '996511', 5, false, 'For business customers the customer pays 5% under reverse charge; your consignment note shows no tax.', { rcmOut: true }),
+            sup('Passenger transport / cab with fuel', '996412', 5, false, '5% without credit.')
+        ],
+        rules: () => [['Industry', 'option', 'GTA forward charge', 'A GTA may choose to pay GST itself at 5% (no credit) or 18% (with credit) by filing Annexure V before 31 March for the next year. Otherwise business customers pay under reverse charge.']]
+    },
+    construction: {
+        name: 'Construction or real estate', icon: '🏗', sells: 'services', comp: 'services', q: [],
+        supplies: () => [sup('Works contract (commercial / industrial)', '995411', 18, true), sup('Residential apartments (not affordable)', '995411', 5, false, '5% without credit; one-third of the price is deemed land value, so the effective rate is lower. Affordable housing has an effective 1% rate.')],
+        rules: () => [['Industry', 'info', 'Real estate conditions', 'Residential projects at the concessional rate must buy at least 80% of inputs from registered suppliers, otherwise they pay tax on the shortfall under reverse charge at 18%. Works contracts for others are 18% with credit. A builder with both commercial and residential projects reverses common credit under Rule 42.']]
+    },
+    wellness: {
+        name: 'Salon, spa, gym or yoga centre', icon: '💇', sells: 'services', comp: 'services', q: [],
+        supplies: () => [sup('Salon / beauty / gym / yoga services', '999721', 5, false, 'GST 2.0: 5% without input credit.')],
+        rules: () => [['Industry', 'must', 'No input tax credit', 'Your services are at 5% without credit, so GST on purchases cannot be claimed.']]
+    },
+    tour: {
+        name: 'Travel agent or tour operator', icon: '✈', sells: 'services', comp: 'services', q: [],
+        supplies: () => [sup('Tour package', '998552', 5, false, '5% without input credit (excluding air fare if shown separately).'), sup('Ticket booking commission / service fee', '998551', 18, true)],
+        rules: () => [['Industry', 'must', 'Mixed supplies: reverse common credit (Rule 42)', 'Credit on common costs is reversed in proportion to tour-package turnover.'], ['Industry', 'info', 'TCS on overseas tour packages', 'Collect TCS on overseas tour packages (section 394, old 206C(1G)) and file Form 143 quarterly.']]
+    },
+    ecommerce: {
+        name: 'Online seller (Amazon, Flipkart, Meesho…)', icon: '📦', sells: 'goods', comp: 'goods', q: ['b2bShare'],
+        supplies: () => [sup('Goods sold online – standard rate', '8536', 18, true, 'Set HSN and rate on each item.', { ref: true })],
+        rules: () => [['Industry', 'must', 'TCS and TDS by the marketplace', 'The marketplace collects 0.5% GST TCS (claim it in your cash ledger after it shows in GSTR-2B/TCS credit) and deducts 0.1% income-tax TDS (old 194-O). Match the monthly settlement reports with your sales.'],
+            ['GST', 'must', 'GST registration', 'Selling through a marketplace needs GST registration whatever the turnover, except small sellers selling only within the state under the enrolment scheme.']]
+    },
+    textiles: {
+        name: 'Garments, textiles or footwear', icon: '👕', sells: 'goods', comp: 'goods', q: ['b2bShare'],
+        supplies: () => [sup('Garments / footwear – up to ₹2,500 a piece', '6109', 5, true, 'GST 2.0: 5% when the sale value per piece is up to ₹2,500.'), sup('Garments / footwear – above ₹2,500 a piece', '6109', 18, true), sup('Fabric', '5208', 5, true)],
+        rules: () => [['Industry', 'info', 'Rate by price', 'The rate on garments and footwear depends on the value per piece; a discount that brings the price to ₹2,500 or less changes the rate to 5%.']]
+    },
+    jewellery: {
+        name: 'Jeweller', icon: '💍', sells: 'goods', comp: 'goods', q: [],
+        supplies: () => [sup('Gold / silver jewellery', '7113', 3, true), sup('Making charges on customer’s gold (job work)', '998892', 5, true)],
+        rules: () => [['Industry', 'info', 'Cash and KYC', 'Cash sales of ₹2 lakh or more need the buyer’s PAN; cash receipts of ₹2 lakh or more in one transaction are prohibited (old 269ST). Hallmarking (HUID) is compulsory.']]
+    },
+    rental: {
+        name: 'Property rental', icon: '🏢', sells: 'services', comp: 'services', q: [],
+        supplies: () => [sup('Commercial rent', '997212', 18, true), sup('Residential rent to individuals for living', '997211', 0, false, 'Exempt.', { exempt: true })],
+        rules: () => [['Industry', 'info', 'Residential to a business', 'Residential property rented to a GST-registered business: the tenant pays 18% under reverse charge.']]
+    },
+    other: { name: 'Other business', icon: '🧾', sells: 'both', comp: 'goods', q: ['b2bShare'], supplies: () => [], rules: () => [] }
+};
+
+// What we ask about the business; each question appears only for the industries that need it
+const BIZ_Q = {
+    maxTariff: ['Highest room rate charged per night (₹)', 'number'],
+    hasRestaurant: ['Restaurant or food service in the hotel', 'bool'],
+    hallHire: ['Rent out halls / meeting rooms (no food)', 'bool'],
+    specifiedOpt: ['Opted to be "specified premises" (restaurant at 18% with credit)', 'bool'],
+    aggregator: ['Sell through Swiggy / Zomato', 'bool'],
+    inSpecified: ['Restaurant is inside a hotel that charges above ₹7,500 a room', 'bool'],
+    excludedGoods: ['Make ice cream, pan masala, tobacco or aerated water', 'bool'],
+    advocate: ['Advocate / legal services', 'bool'],
+    pharmacy: ['Has a pharmacy', 'bool'],
+    roomsAbove5000: ['Hospital rooms above ₹5,000 a day (non-ICU)', 'bool'],
+    coaching: ['Also run coaching / non-recognised courses', 'bool'],
+    gtaOption: ['GST on goods transport', 'select', [['rcm', 'Customer pays (reverse charge)'], ['fwd5', 'We pay 5% (no credit)'], ['fwd18', 'We pay 18% (with credit)']]],
+    vehicles: ['Number of goods vehicles owned', 'number'],
+    b2bShare: ['Sales to GST-registered businesses (%)', 'number'],
+    investment: ['Investment in plant & machinery / equipment (₹)', 'number'],
+    exports: ['Export services / goods', 'bool']
+};
+const SPECIAL_GOODS_20L = ['12', '14', '17', '15', '13', '34', '11', '36', '16', '05'];   // states that kept ₹20 lakh for goods
+const SPECIAL_SVC_10L = ['14', '15', '13', '16'];
+const COMP_75L = ['12', '14', '17', '15', '13', '11', '16', '02'];
+const nz = x => Number(x) || 0;
+const lakh = x => x >= 10000000 ? `₹${+(x / 10000000).toFixed(2)} crore` : `₹${+(x / 100000).toFixed(2)} lakh`;
+
+function bizDefaults() {
+    const p = co.profile, b = p.biz || {};
+    return { industry: '', turnoverLast: p.aato || 0, turnoverExp: 0, interstate: false, ecommerce: false, exports: false, employees: (co.employees || []).filter(e => e.status !== 'Inactive').length, cashPct: 10, paidUp: 0, netWorth: 0, netProfit: 0, borrowings: 0, investment: 0, maxTariff: 3000, gtaOption: 'rcm', b2bShare: 50, scheme: p.gstType || 'regular', freq: p.gstFreq || 'monthly', ...b };
+}
+
+// ---------- the rules engine ----------
+function businessRules(b, profile = co.profile) {
+    const ind = INDUSTRIES[b.industry] || INDUSTRIES.other;
+    const R = [], add = (area, level, title, text) => R.push({ area, level, title, text });
+    const st = profile.state, ent = profile.entity || 'Proprietorship';
+    const T = Math.max(nz(b.turnoverLast), nz(b.turnoverExp));
+    const supplies = ind.supplies(b);
+    const company = /Ltd/.test(ent), llp = ent === 'LLP', indiv = ['Proprietorship', 'HUF'].includes(ent);
+    const services = ind.sells !== 'goods';
+
+    // --- GST registration ---
+    const limit = services ? (SPECIAL_SVC_10L.includes(st) ? 1000000 : 2000000) : (SPECIAL_GOODS_20L.includes(st) ? 2000000 : 4000000);
+    const allExempt = supplies.length && supplies.every(s => s.exempt || s.rcmOut);
+    const compulsory = [b.interstate && !services && 'inter-state sale of goods', b.ecommerce && 'selling through e-commerce'].filter(Boolean);
+    if (allExempt) add('GST', 'info', 'GST registration may not be needed', 'All your supplies are exempt or taxed under reverse charge in the customer’s hands. Registration is needed only if you also make taxable supplies above the limit.');
+    else if (compulsory.length) add('GST', 'must', 'GST registration compulsory', `Required whatever the turnover because of ${compulsory.join(' and ')}.`);
+    else if (T > limit) add('GST', 'must', 'GST registration compulsory', `Turnover ${lakh(T)} is above the ${lakh(limit)} limit for ${services ? 'services' : 'goods'} in ${stateName(st)}.`);
+    else add('GST', 'option', 'GST registration optional', `Turnover is within the ${lakh(limit)} limit. Registering voluntarily lets business customers claim credit and you claim credit on purchases${supplies.some(s => !s.itc) ? ' (not for your no-credit supplies)' : ''}.`);
+
+    // --- composition ---
+    const comp = compositionOf(b, profile);
+    if (comp.eligible) add('GST', comp.recommended ? 'good' : 'option', `Composition scheme available (${comp.rate}% of turnover)`, `${comp.why} ${comp.recommended ? 'Recommended: most of your sales are to consumers, so a lower price without GST helps.' : 'Not recommended for you: business customers cannot claim credit on your bills and you lose credit on purchases.'} Opt in with CMP-02 before 31 March for the next year.`);
+    else if (comp.reason) add('GST', 'info', 'Composition scheme not available', comp.reason);
+
+    // --- returns ---
+    if (b.scheme === 'composition' && comp.eligible) {
+        add('GST', 'must', 'Returns: CMP-08 quarterly and GSTR-4 yearly', 'Pay tax on turnover with CMP-08 by the 18th after each quarter and file GSTR-4 by 30 June. Issue "Bill of supply" (no GST) and display "Composition taxable person" at the shop.');
+    } else {
+        add('GST', T <= 50000000 ? 'option' : 'must', T <= 50000000 ? 'Monthly or quarterly returns (QRMP)' : 'Monthly GSTR-1 and GSTR-3B', T <= 50000000 ? 'Turnover up to ₹5 crore may file GSTR-1 and GSTR-3B quarterly and pay tax monthly by PMT-06 (25th). Monthly filing suits you if business customers want their credit quickly.' : 'GSTR-1 by the 11th and GSTR-3B by the 20th.');
+        add('GST', T > 20000000 ? 'must' : 'option', T > 20000000 ? 'GSTR-9 annual return' : 'GSTR-9 optional', T > 20000000 ? 'File GSTR-9 by 31 December.' : 'Turnover up to ₹2 crore: the annual return is optional.');
+        if (T > 50000000) add('GST', 'must', 'GSTR-9C reconciliation', 'Turnover above ₹5 crore: self-certified reconciliation of books with returns along with GSTR-9.');
+    }
+    const pol = itcPolicyOf(b);
+    if (nz(profile.aato) > 50000000 || nz(b.turnoverLast) > 50000000) add('GST', 'must', 'E-invoicing', `Generate an IRN for every B2B invoice and credit note${nz(b.turnoverLast) >= 100000000 ? ' within 30 days of the invoice date' : ''}. Invoices show 6-digit HSN.`);
+    else add('GST', 'info', 'HSN on invoices', 'Turnover up to ₹5 crore: 4-digit HSN / SAC on B2B invoices.');
+    if (pol === 'mixed') add('GST', 'must', 'Common credit reversal every month', 'Rule 42: credit on common purchases × (no-credit and exempt turnover ÷ total turnover) is reversed in GSTR-3B 4(B)(1). The ERP calculates and posts it with the set-off journal.');
+
+    // --- income tax ---
+    const presumptiveOk = indiv || ent === 'Partnership';
+    const lowCash = nz(b.cashPct) <= 5;
+    if (ind.presumptive === 'profession') {
+        const lim = lowCash ? 7500000 : 5000000;
+        if (presumptiveOk && T <= lim) add('Income tax', 'option', 'Presumptive tax for professionals (old 44ADA)', `Receipts up to ${lakh(lim)}: declare 50% of receipts as profit, no books or audit needed; advance tax in one instalment by 15 March.`);
+        add('Income tax', T > 5000000 ? 'must' : 'info', T > 5000000 ? 'Tax audit' : 'Tax audit not needed', T > 5000000 ? 'Professional receipts above ₹50 lakh: accounts must be audited by a CA before 30 September.' : 'Receipts up to ₹50 lakh (unless you declare less than the presumptive profit).');
+    } else {
+        if (ind.presumptive === 'transport' && presumptiveOk && nz(b.vehicles) && nz(b.vehicles) <= 10) add('Income tax', 'option', 'Presumptive tax for transporters (old 44AE)', `Up to 10 goods vehicles: profit taken as ₹7,500 a vehicle a month (heavy vehicles ₹1,000 a tonne a month) — about ${inr0(nz(b.vehicles) * 7500 * 12)} a year for ${nz(b.vehicles)}.`);
+        const lim = lowCash ? 30000000 : 20000000;
+        if (presumptiveOk && T <= lim) add('Income tax', 'option', 'Presumptive tax for business (old 44AD)', `Turnover up to ${lakh(lim)}${lowCash ? ' (cash receipts within 5%)' : ''}: declare 8% of turnover (6% of digital receipts) as profit; no audit; advance tax in one instalment by 15 March. Not for LLPs or companies.`);
+        const auditLim = lowCash ? 100000000 : 10000000;
+        add('Income tax', T > auditLim ? 'must' : 'info', T > auditLim ? 'Tax audit' : 'Tax audit not needed', T > auditLim ? `Turnover ${lakh(T)} is above ${lakh(auditLim)}${lowCash ? '' : ' (₹10 crore applies only if cash receipts and payments are each within 5%)'}: accounts audited by a CA before 30 September.` : `Turnover is within ${lakh(auditLim)}${company ? ' (companies still have the statutory audit)' : ''}.`);
+    }
+    if (company) add('Income tax', 'option', 'Company tax rate', 'Domestic company: 25% (turnover up to ₹400 crore) or 22% under the concessional regime (old 115BAA) without most deductions and without MAT.');
+    if (company || llp || ent === 'Partnership' || ent === 'Trust / Society' || nz(b.turnoverLast) > (ind.presumptive === 'profession' ? 5000000 : 10000000)) add('Income tax', 'must', 'Deduct TDS on payments', 'Rent, contractors, professionals, commission and salaries: deduct TDS, deposit by the 7th and file quarterly returns. Get a TAN.');
+    else add('Income tax', 'info', 'TDS on business payments not needed', 'Individuals / HUFs with last year’s turnover up to ₹1 crore (professions ₹50 lakh) need not deduct TDS on business payments (salary TDS still applies above the exemption).');
+    add('Income tax', 'must', 'Pay small suppliers on time (old 43B(h))', 'Amounts due to micro and small enterprises must be paid within 45 days (15 days without an agreement); otherwise the expense is allowed only in the year paid. The ERP flags MSME vendors past due.');
+
+    // --- company / LLP law ---
+    if (company) {
+        const small = ent === 'Private Ltd' && nz(b.paidUp) <= 40000000 && T <= 400000000;
+        add('Company law', 'info', small ? 'Small company' : 'Not a small company', small ? 'Paid-up capital up to ₹4 crore and turnover up to ₹40 crore: a cash flow statement is not mandatory, CARO 2020 does not apply, two board meetings a year are enough and the short annual return MGT-7A is filed.' : 'Prepare a cash flow statement and follow full board and filing requirements.');
+        const caroFree = small || (ent === 'Private Ltd' && nz(b.paidUp) + nz(b.netWorth) <= 10000000 && nz(b.borrowings) <= 10000000 && T <= 100000000);
+        if (!small) add('Company law', caroFree ? 'info' : 'must', caroFree ? 'CARO 2020 not applicable' : 'CARO 2020 report', caroFree ? 'Private company with capital + reserves and borrowings each within ₹1 crore and revenue within ₹10 crore.' : 'The auditor reports on fixed assets, inventory, loans, statutory dues and more; keep registers ready.');
+        add('Company law', 'info', nz(b.netWorth) >= 2500000000 ? 'Ind AS applies' : 'Accounting Standards (Division I)', nz(b.netWorth) >= 2500000000 ? 'Net worth of ₹250 crore or more: prepare Ind AS financial statements.' : 'Schedule III Division I and the Accounting Standards — the format this ERP uses.');
+        if (nz(b.netWorth) >= 5000000000 || T >= 10000000000 || nz(b.netProfit) >= 50000000) add('Company law', 'must', 'CSR', 'Spend 2% of the average net profit of the last three years on CSR and report it in the board report.');
+        add('Company law', 'must', 'Annual filings', 'Statutory audit, AGM by 30 September, AOC-4 within 30 days and MGT-7/7A within 60 days of the AGM, DIR-3 KYC, and MSME-1 twice a year if dues to small suppliers are older than 45 days.');
+    } else if (llp) add('Company law', T > 4000000 ? 'must' : 'info', T > 4000000 ? 'LLP audit and filings' : 'LLP filings', `${T > 4000000 ? 'Turnover above ₹40 lakh: accounts must be audited. ' : ''}Form 11 by 30 May, Form 8 by 30 October.`);
+    else add('Company law', 'info', 'Books of account', 'Keep books of account and bills for 8 years (GST: 72 months from the annual return due date).');
+
+    // --- labour (Tamil Nadu values where state-specific) ---
+    const n = nz(b.employees);
+    add('Labour', n >= 20 ? 'must' : 'info', n >= 20 ? 'Provident Fund (EPF) compulsory' : 'Provident Fund', n >= 20 ? '20 or more employees: 12% of basic (up to ₹15,000) from employee and employer, ECR by the 15th.' : `Compulsory from 20 employees (you have ${n}); voluntary coverage is allowed.`);
+    add('Labour', n >= 10 ? 'must' : 'info', n >= 10 ? 'ESI compulsory' : 'ESI', n >= 10 ? '10 or more employees: 0.75% employee + 3.25% employer on wages up to ₹21,000, paid by the 15th.' : 'Applies from 10 employees.');
+    if (n >= 10) add('Labour', 'must', 'Gratuity', 'Payable on leaving after 5 years of service (fixed-term staff after 1 year under the Code on Social Security): 15 days’ wages for each year. Provide for it in the accounts.');
+    if (n >= 20) add('Labour', 'must', 'Bonus', 'Employees earning up to ₹21,000 a month: bonus of 8.33% to 20% of wages each year.');
+    if (n) add('Labour', 'info', 'Labour codes', 'The four labour codes apply: "wages" must be at least 50% of pay for PF, gratuity and bonus, appointment letters are compulsory and wages are paid by the 7th.');
+    if (st === '33' && n) add('Labour', 'must', 'Tamil Nadu professional tax and welfare fund', 'Professional tax deducted half-yearly (September and March); Labour Welfare Fund ₹20 employee + ₹40 employer by 31 January.');
+
+    // --- MSME ---
+    const inv = nz(b.investment);
+    const cls = inv <= 25000000 && T <= 100000000 ? 'Micro' : inv <= 250000000 && T <= 1000000000 ? 'Small' : inv <= 1250000000 && T <= 5000000000 ? 'Medium' : '';
+    if (cls) add('MSME', 'good', `${cls} enterprise — register on Udyam`, `By investment (${lakh(inv)}) and turnover (${lakh(T)}). Free Udyam registration gives payment protection: ${cls === 'Medium' ? 'priority lending and scheme benefits' : 'your buyers must pay within 45 days or pay interest at three times the bank rate'}.`);
+
+    (ind.rules(b) || []).forEach(r => add(...r));
+    return R;
+}
+function compositionOf(b, profile = co.profile) {
+    const ind = INDUSTRIES[b.industry] || INDUSTRIES.other;
+    const T = Math.max(nz(b.turnoverLast), nz(b.turnoverExp));
+    const kind = ind.comp;
+    if (!kind) return { eligible: false, reason: 'Exempt or mixed health-care supplies: composition is not useful.' };
+    if (b.interstate || b.exports) return { eligible: false, reason: 'Composition dealers cannot sell outside the state or export.' };
+    if (b.excludedGoods) return { eligible: false, reason: 'Manufacturers of ice cream, pan masala, tobacco and aerated water cannot opt for composition.' };
+    if (kind === 'services') {
+        if (T > 5000000) return { eligible: false, reason: `Service providers can opt only up to ₹50 lakh turnover (you: ${lakh(T)}).` };
+        return { eligible: true, rate: 6, kind, why: 'Service providers up to ₹50 lakh can pay 6% of turnover (section 10(2A)) instead of charging GST.', recommended: false };
+    }
+    const lim = COMP_75L.includes(profile.state) ? 7500000 : 15000000;
+    if (T > lim) return { eligible: false, reason: `Turnover ${lakh(T)} is above the ${lakh(lim)} limit.` };
+    const rate = kind === 'restaurant' ? 5 : 1;
+    return { eligible: true, rate, kind, why: `${kind === 'restaurant' ? 'Restaurants' : b.industry === 'manufacturer' ? 'Manufacturers' : 'Traders'} up to ${lakh(lim)} can pay ${rate}% of turnover.`, recommended: kind === 'goods' && nz(b.b2bShare) < 30 };
+}
+// 'full' (claim credit), 'none' (no supply allows credit), 'mixed' (Rule 42 reversal)
+function itcPolicyOf(b) {
+    if (b.scheme === 'composition' && compositionOf(b).eligible) return 'none';
+    const S = (INDUSTRIES[b.industry] || INDUSTRIES.other).supplies(b).filter(s => !s.rcmOut);
+    if (!S.length) return 'full';
+    const yes = S.some(s => s.itc && !s.exempt), no = S.some(s => !s.itc || s.exempt);
+    return yes && no ? 'mixed' : no ? 'none' : 'full';
+}
+const bizPolicy = () => co?.profile?.itcPolicy || 'full';
+
+// ---------- applying the profile to the books ----------
+function applyBusinessProfile(b, opts = {}) {
+    assertEdit();
+    if (!INDUSTRIES[b.industry]) throw new Error('Choose what your business does.');
+    const p = co.profile, before = `${p.biz?.industry || '—'} · ${p.gstType || 'regular'} · ${p.itcPolicy || 'full'}`;
+    const comp = compositionOf(b);
+    const scheme = b.scheme === 'composition' && comp.eligible ? 'composition' : 'regular';
+    const from = opts.from || todayISO();
+    p.biz = { ...b, scheme, appliedOn: todayISO() };
+    if (nz(b.turnoverLast)) p.aato = nz(b.turnoverLast);
+    p.gstType = scheme;
+    p.compRate = scheme === 'composition' ? comp.rate : 0;
+    p.gstFreq = scheme === 'composition' ? 'quarterly' : (b.freq || p.gstFreq || 'monthly');
+    p.itcPolicy = itcPolicyOf({ ...b, scheme });
+    p.itcPolicyFrom = from;
+    const added = [];
+    if (opts.items !== false) (INDUSTRIES[b.industry].supplies(b)).filter(s => !s.ref).forEach(s => {
+        if (co.items.some(i => i.bizSupply === s.name || i.name.toLowerCase() === s.name.toLowerCase())) return;
+        saveItem({ name: s.name, type: s.type, hsn: s.hsn, gstRate: s.rate, unit: s.type === 'service' ? 'OTH' : 'NOS', rate: 0, purchaseRate: 0, trackStock: false, openQty: 0, openValue: 0, noItc: !s.itc, exempt: Boolean(s.exempt), eco95: Boolean(s.eco95), rcmOut: Boolean(s.rcmOut), bizSupply: s.name });
+        added.push(s.name);
+    });
+    audit('Business profile applied', { entity: 'Company', ref: p.name, before, after: `${INDUSTRIES[b.industry].name} · ${scheme}${scheme === 'composition' ? ` ${p.compRate}%` : ''} · input credit ${p.itcPolicy} from ${fmtDate(from)}${added.length ? ` · ${added.length} rate item(s) added` : ''}` });
+    ver++;
+    saveCo();
+    return { scheme, policy: p.itcPolicy, added };
+}
+
+// ---------- composition: CMP-08 (quarterly) and GSTR-4 (yearly) ----------
+function cmp08(fy, q) {
+    const months = QUARTERS[q].map(m => `${m >= 4 ? fy : fy + 1}-${String(m).padStart(2, '0')}`);
+    const V = co.vouchers.filter(v => v.status !== 'cancelled' && months.includes(ymOf(v.date)));
+    const exemptTaxable = v => sum((v.lines || []).filter(l => itemById(l.itemId)?.exempt), 'taxable');
+    const turnover = r2(sum(V.filter(v => v.type === 'SI'), v => v.totals.taxable - exemptTaxable(v)) - sum(V.filter(v => v.type === 'CN'), v => v.totals.taxable - exemptTaxable(v)));
+    const rate = nz(co.profile.compRate) || 1;
+    const tax = Math.round(turnover * rate / 100);
+    const rcm = r2(sum(V.filter(v => v.type === 'PB' && v.rcm), v => v.totals.tax));
+    const last = months[2], due = `${addMonths(last, 1)}-18`;
+    const posted = co.vouchers.find(v => v.ext === `cmp08:${fy}:${q}` && v.status !== 'cancelled');
+    return { fy, q, months, turnover, rate, tax, cgst: r2(tax / 2), sgst: r2(tax - r2(tax / 2)), rcm, due, posted, exempt: r2(sum(V.filter(v => v.type === 'SI'), exemptTaxable)) };
+}
+function postCompositionTax(fy, q) {
+    const c = cmp08(fy, q);
+    if (c.posted) throw new Error(`Composition tax for ${q} is already posted (${c.posted.no}).`);
+    if (!c.tax) throw new Error('No turnover in this quarter.');
+    return saveVoucher({ type: 'JV', date: lastDay(c.months[2]), ext: `cmp08:${fy}:${q}`, jlines: [{ acc: sysId('compTax'), dr: c.tax, cr: 0 }, { acc: sysId('compPay'), dr: 0, cr: c.tax }], narration: `Composition tax ${c.rate}% on turnover ${inr(c.turnover)} for ${q} FY ${fyLabel(fy)} (CMP-08)` }, { source: 'CMP-08' });
+}
+function gstr4(fy) {
+    const Q = Object.keys(QUARTERS).map(q => cmp08(fy, q));
+    const V = co.vouchers.filter(v => v.status !== 'cancelled' && fyOf(v.date) === fy && v.type === 'PB');
+    const inward = (f) => V.filter(f).reduce((a, v) => ({ txval: a.txval + v.totals.taxable, tax: a.tax + v.totals.tax }), { txval: 0, tax: 0 });
+    return { quarters: Q, turnover: r2(sum(Q, 'turnover')), tax: r2(sum(Q, 'tax')), rcm: r2(sum(Q, 'rcm')), fromReg: inward(v => !v.rcm && isRegistered(contactById(v.partyId))), fromUnreg: inward(v => !isRegistered(contactById(v.partyId)) && !v.rcm), rcmIn: inward(v => v.rcm), due: `${fy + 1}-06-30` };
+}
+function compositionHtml() {
+    const fy = state.fy, g = gstr4(fy);
+    const rows = g.quarters.map(c => `<tr><td>${c.q}</td><td>${c.months.map(m => ymLabel(m).slice(0, 3)).join(' – ')}</td>${amtCell(c.turnover)}<td class="n">${c.rate}%</td>${amtCell(c.tax)}${amtCell(c.rcm)}<td>${fmtDate(c.due)}</td><td>${c.posted ? `<a href="#/v/${c.posted.id}" class="badge good">Posted ${esc(c.posted.no)}</a>` : c.tax && c.months[2] < ymOf(todayISO()) && canEdit() ? `<button class="btn btn-p btn-sm" onclick="try{postCompositionTax(${fy},'${c.q}');toast('Composition tax posted.');route()}catch(e){alert(e.message)}">Post tax</button>` : '—'}</td></tr>`).join('');
+    return `<div class="card"><h2>CMP-08 · composition tax by quarter</h2><p class="note" style="margin-bottom:10px">You pay ${nz(co.profile.compRate)}% of turnover (exempt supplies excluded) from your own pocket — customers are not charged GST — plus any reverse-charge tax. Post the tax, pay it by the 18th with the CMP-08 challan, then mark it filed in Due dates.</p>
+        <div class="tbl"><table class="t"><thead><tr><th>Quarter</th><th>Months</th><th class="n">Turnover</th><th class="n">Rate</th><th class="n">Tax</th><th class="n">Reverse charge</th><th>Due</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></div>
+        <div class="card"><h2>GSTR-4 · FY ${fyLabel(fy)} (due ${fmtDate(g.due)})</h2><table class="t"><tbody>
+        <tr><td>Outward supplies (turnover)</td>${amtCell(g.turnover)}</tr><tr><td>Composition tax paid through CMP-08</td>${amtCell(g.tax)}</tr>
+        <tr><td>Inward supplies from registered suppliers (table 4A)</td>${amtCell(g.fromReg.txval)}</tr><tr><td>Inward supplies from unregistered suppliers</td>${amtCell(g.fromUnreg.txval)}</tr>
+        <tr><td>Inward supplies under reverse charge (table 4B/4C) — tax</td>${amtCell(g.rcmIn.tax)}</tr></tbody></table></div>`;
+}
+
+// ---------- screen ----------
+let bizDraft = null;
+function viewBusiness() {
+    bizDraft ||= bizDefaults();
+    const b = bizDraft, p = co.profile;
+    const cards = Object.entries(INDUSTRIES).map(([k, x]) => `<button type="button" class="ind ${b.industry === k ? 'on' : ''}" onclick="bizSet('industry','${k}')"><span>${x.icon}</span>${esc(x.name)}</button>`).join('');
+    $('#view').innerHTML = pageHead('Business profile', 'Tell the ERP what your business does and how big it is. It works out the GST rates, input credit, returns, income-tax, company-law and labour rules that apply, and sets up your books for them.')
+        + (p.biz ? `<div class="card" style="border-left:4px solid var(--good)"><b>Applied on ${fmtDate(p.biz.appliedOn)}:</b> ${esc(INDUSTRIES[p.biz.industry]?.name || '')} · ${p.gstType === 'composition' ? `composition ${p.compRate}%` : 'regular GST'} · input credit: ${{ full: 'claimed', none: 'not claimed (no-credit supplies)', mixed: 'claimed with Rule 42 reversal' }[p.itcPolicy || 'full']}. Change anything below and apply again.</div>` : '')
+        + `<div class="card"><h2>1. What does the business do?</h2><div class="inds">${cards}</div></div>
+        <div class="card" id="bizQ"></div><div id="bizOut"></div>`;
+    drawBizQ(); drawBizOut();
+}
+function bizSet(k, v) { bizDraft[k] = v; if (k === 'industry') { viewBusiness(); return; } drawBizOut(); }
+function drawBizQ() {
+    const b = bizDraft, ind = INDUSTRIES[b.industry];
+    if (!ind) { $('#bizQ').innerHTML = '<p class="note">Choose the nearest match above to continue.</p>'; return; }
+    const company = /Ltd/.test(co.profile.entity);
+    const field = (k, label, type, extra) => {
+        if (type === 'bool') return `<label class="chk"><input type="checkbox" ${b[k] ? 'checked' : ''} onchange="bizSet('${k}',this.checked)"> ${label}</label>`;
+        if (type === 'select') return `<label class="f">${label}<select onchange="bizSet('${k}',this.value)">${extra.map(([v, l]) => opt(v, l, b[k])).join('')}</select></label>`;
+        return `<label class="f">${label}<input type="number" min="0" value="${esc(b[k] ?? '')}" oninput="bizSet('${k}',this.value)"></label>`;
+    };
+    const specific = ind.q.map(k => field(k, ...BIZ_Q[k]));
+    $('#bizQ').innerHTML = `<h2>2. Size and how you sell</h2><p class="note" style="margin-bottom:10px">${esc(co.profile.entity)} in ${esc(stateName(co.profile.state))} (change in Company details). Rough figures are fine.</p>
+        <div class="fg">${field('turnoverLast', 'Turnover last year (₹)')}${field('turnoverExp', 'Expected turnover this year (₹)')}${field('employees', 'Number of employees')}${field('cashPct', 'Cash receipts (% of sales)')}
+        ${company ? field('paidUp', 'Paid-up share capital (₹)') + field('netWorth', 'Net worth (₹)') + field('borrowings', 'Borrowings (₹)') + field('netProfit', 'Net profit last year (₹)') : ''}
+        ${ind.q.includes('investment') ? '' : field('investment', 'Investment in plant, machinery / equipment (₹)')}
+        ${specific.filter(h => !h.includes('class="chk"')).join('')}</div>
+        <div class="grid g2" style="margin-top:10px">${field('interstate', 'Sell to customers in other states', 'bool')}${field('ecommerce', 'Sell through Amazon / Flipkart / other marketplaces', 'bool')}${ind.q.includes('exports') ? '' : field('exports', 'Export or supply to SEZ', 'bool')}${specific.filter(h => h.includes('class="chk"')).join('')}</div>`;
+}
+function drawBizOut() {
+    const b = bizDraft, ind = INDUSTRIES[b.industry];
+    if (!ind) { $('#bizOut').innerHTML = ''; return; }
+    const S = ind.supplies(b), R = businessRules(b), comp = compositionOf(b), pol = itcPolicyOf(b);
+    const AREAS = ['GST', 'Industry', 'Income tax', 'Company law', 'Labour', 'MSME'];
+    const badge = { must: '<span class="badge bad">Must</span>', option: '<span class="badge warn">Option</span>', good: '<span class="badge good">Benefit</span>', info: '<span class="badge">Info</span>' };
+    const rates = S.length ? `<div class="tbl"><table class="t"><thead><tr><th>Supply</th><th>HSN / SAC</th><th class="n">GST</th><th>Input credit</th><th>Note</th></tr></thead><tbody>${S.map(s => `<tr><td><b>${esc(s.name)}</b></td><td>${s.hsn}</td><td class="n">${s.exempt ? 'Exempt' : s.rate + '%'}</td><td>${s.exempt ? '—' : s.itc ? '<span class="badge good">Yes</span>' : '<span class="badge bad">No</span>'}</td><td style="white-space:normal;min-width:220px" class="note">${esc(s.note)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="note">Rates depend on each item’s HSN — set them on your items.</p>';
+    $('#bizOut').innerHTML = `<div class="card"><h2>3. Your GST rates</h2>${rates}
+        <p class="note" style="margin-top:8px">Input credit on purchases: <b>${{ full: 'claimed in full', none: 'not claimed — every purchase is booked with GST as cost', mixed: 'claimed, with common credit reversed under Rule 42 each month' }[pol]}</b>.</p></div>
+        <div class="card"><h2>4. Rules that apply to you</h2>${AREAS.map(a => { const L = R.filter(r => r.area === a); return L.length ? `<h4 style="margin:12px 0 6px">${a}</h4><ul class="rules">${L.map(r => `<li>${badge[r.level]} <b>${esc(r.title)}</b><div class="note">${esc(r.text)}</div></li>`).join('')}</ul>` : ''; }).join('')}</div>
+        <div class="card"><h2>5. Apply to my books</h2><div class="fg">
+            <label class="f">GST scheme<select onchange="bizDraft.scheme=this.value;drawBizOut()">${opt('regular', 'Regular (charge GST, claim credit)', b.scheme)}${comp.eligible ? opt('composition', `Composition — ${comp.rate}% of turnover${comp.recommended ? ' (recommended)' : ''}`, b.scheme) : ''}</select></label>
+            ${b.scheme !== 'composition' ? `<label class="f">Return filing<select onchange="bizDraft.freq=this.value">${opt('monthly', 'Monthly', b.freq)}${Math.max(nz(b.turnoverLast), nz(b.turnoverExp)) <= 50000000 ? opt('quarterly', 'Quarterly (QRMP)', b.freq) : ''}</select></label>` : ''}
+            <label class="f">Apply from<input type="date" id="biz_from" value="${co.profile.itcPolicyFrom || todayISO()}"></label></div>
+            <label class="chk" style="margin-top:10px"><input type="checkbox" id="biz_items" checked> Add the rates above as items (ready to pick on invoices)</label>
+            <p class="note" style="margin-top:8px">Earlier entries are not changed. A change of scheme normally takes effect from 1 April (composition opt-in by 31 March).</p>
+            ${canEdit() ? `<div class="row" style="margin-top:12px"><button class="btn btn-p" onclick="doApplyBiz()">Apply to my books</button></div>` : ''}</div>`;
+}
+function doApplyBiz() {
+    try {
+        const r = applyBusinessProfile(bizDraft, { items: $('#biz_items').checked, from: $('#biz_from').value || todayISO() });
+        bizDraft = null;
+        toast(`Applied: ${r.scheme === 'composition' ? 'composition scheme' : 'regular GST'}, input credit ${r.policy}${r.added.length ? `, ${r.added.length} rate item(s) added` : ''}.`);
+        route();
+    } catch (e) { alert(e.message); }
+}
+
+</script>
+<script>/* js/demo.js */
+'use strict';
+// ===================== We Create ERP · demo dashboard data =====================
+// When the sample workspace is created, STAY BAY and Eco Pack get their own companies, connected to their
+// dashboards. If a dashboard's real data is in this browser it is used; otherwise these built-in demo copies
+// (same format as the dashboards save) are used, so the connections can be tried anywhere. The demo grows
+// month by month like a live dashboard; syncing again adds only the new months.
+
+function demoRnd(seed) { return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+const demoMonths = () => { const fy = fyOf(todayISO()); return fyMonths(fy).filter(m => m < ymOf(todayISO())); };
+
+function demoStayBay() {
+    const months = demoMonths();
+    const staff = [
+        ['SBY001', 'Ravi Kumar', 'Front Office', 'Front Office Manager', 32000, 'ABCPR1234K', 300], ['SBY002', 'Lakshmi Narayanan', 'Accounts', 'Accountant', 26000, 'BXKPL4471M', 0],
+        ['SBY003', 'Selvi R', 'Housekeeping', 'Room Attendant', 15000, '', 0], ['SBY004', 'Murali K', 'Housekeeping', 'Housekeeping Supervisor', 19000, '', 0],
+        ['SBY005', 'Anitha S', 'Front Office', 'Receptionist', 17000, '', 0], ['SBY006', 'Prakash D', 'Maintenance', 'Electrician', 18500, '', 0],
+        ['SBY007', 'Karthik V', 'Security', 'Security Guard', 14000, '', 0], ['SBY008', 'Revathi M', 'Housekeeping', 'Laundry Attendant', 13500, '', 0]
+    ];
+    const rnd = demoRnd(7301);
+    const employees = staff.map(([code, name, department, designation, salary, pan, tds], i) => {
+        const payments = {};
+        months.forEach(ym => {
+            const lop = rnd() < 0.15 ? 1 + Math.floor(rnd() * 2) : 0;
+            const adv = i === 2 && ym === months[1] ? 2000 : 0;
+            const r = computePayRow({ salary, pf: true, esi: true, basicPct: 50, tdsMonthly: tds }, ym, lop, adv);
+            payments[ym] = { paidOn: `${addMonths(ym, 1)}-0${1 + (i % 5)}`, snapshot: { gross: salary, lop: r2(salary - r.gross), earnedGross: r.gross, earnedBasic: r.basic, pf: r.pf, esi: r.esi, pt: r.pt, tds: r.tds, advance: r.adv, loan: 0, net: r.net, employerPf: r.erPf, employerEsi: r.erEsi } };
+        });
+        return { id: `sb${i + 1}`, code, name, department, designation, salary, doj: `20${18 + (i % 6)}-0${1 + (i % 9)}-10`, status: 'Active', pan, epf: `TNMAS00${54321 + i}`, salaryConfig: { pfEnabled: true, esiEnabled: true, basicPct: 50 }, payments };
+    });
+    return { employees, employer: { name: 'STAY BAY Business Hotels', address: 'No. 12, GST Road, Guindy', place: 'Chennai' }, from: 'built-in demo data' };
+}
+
+function demoEcoPack() {
+    const months = demoMonths(), today = todayISO(), fy = fyOf(today);
+    const rnd = demoRnd(4409);
+    const products = [
+        { id: 'garb', name: 'Garbage Bag (Black)', unit: 'kg', wt: 1, rate: 128, recipe: { hdpe: 0.6, rec: 0.4 } },
+        { id: 'shop', name: 'Shopping Bag (W-cut)', unit: 'kg', wt: 1, rate: 150, recipe: { lldpe: 0.7, hdpe: 0.3 } },
+        { id: 'bubble', name: 'Air Bubble Roll', unit: 'kg', wt: 1, rate: 172, recipe: { ldpe: 1 } }
+    ];
+    const materials = [{ id: 'hdpe', name: 'HDPE Granules', rate: 100 }, { id: 'rec', name: 'Reprocessed Granules', rate: 60 }, { id: 'lldpe', name: 'LLDPE Granules', rate: 105 }, { id: 'ldpe', name: 'LDPE Granules', rate: 110 }];
+    const customers = [
+        { id: 'c1', name: 'Sri Lakshmi Traders', city: 'Chennai', state: 'Tamil Nadu', gstin: makeGstin('33', 'AAKFS2210L'), creditDays: 30 },
+        { id: 'c2', name: 'Deccan Electronics', city: 'Bengaluru', state: 'Karnataka', gstin: makeGstin('29', 'AADCD4410E'), creditDays: 45 },
+        { id: 'c3', name: 'Coastal Fresh Mart', city: 'Puducherry', state: 'Puducherry', gstin: makeGstin('34', 'AAJFC7781M'), creditDays: 30 },
+        { id: 'c4', name: 'Annai Supermarket', city: 'Madurai', state: 'Tamil Nadu', creditDays: 15 }
+    ];
+    const vendors = { hdpe: 'Polymer distributor, Ambattur', lldpe: 'Polymer distributor, Ambattur', ldpe: 'Reliance polymers dealer, Guindy', rec: 'Reprocessed granules supplier, Padi' };
+    const start = `${fy}-04-01`;
+    const moves = [
+        ...materials.map(m => ({ date: start, type: 'rm', item: m.id, qty: 1500, rate: m.rate, kind: 'Opening' })),
+        ...products.map(p => ({ date: start, type: 'fg', item: p.id, qty: 400, rate: Math.round(p.rate * 0.72), kind: 'Opening' }))
+    ];
+    const production = [], orders = [], maintenance = [];
+    const buy = { hdpe: 2700, rec: 1350, lldpe: 1500, ldpe: 1650 };
+    let inv = 0;
+    months.forEach((ym, mi) => {
+        materials.forEach((m, i) => moves.push({ date: `${ym}-0${3 + i}`, type: 'rm', item: m.id, qty: buy[m.id], rate: m.rate + Math.round(rnd() * 4), kind: 'Purchase', party: vendors[m.id], bill: `PB-${ym.slice(2).replace('-', '')}-${m.id.toUpperCase()}` }));
+        ['08', '14', '20', '26'].forEach(d => products.forEach(p => production.push({ date: `${ym}-${d}`, productId: p.id, qty: { garb: 750, shop: 500, bubble: 375 }[p.id], scrap: { garb: 15, shop: 10, bubble: 8 }[p.id] })));
+        for (let k = 0; k < 6; k++) {
+            const p = products[k % 3], c = customers[(k + mi) % 4];
+            const dd = String(10 + k * 3).padStart(2, '0'), date = `${ym}-${dd}`;
+            const qty = { garb: 450, shop: 300, bubble: 220 }[p.id] + Math.round(rnd() * 40);
+            const no = `EP/${fyLabel(fy)}/${String(++inv).padStart(4, '0')}`;
+            const intra = c.state === 'Tamil Nadu';
+            const total = Math.round(qty * p.rate * 1.18);
+            const paidOn = addDays(date, c.creditDays);
+            orders.push({ id: `o-${ym}-${k}`, no: `SO-${inv}`, date: addDays(date, -2), customerId: c.id, productId: p.id, qty, rate: p.rate, status: 'Dispatched', dispatch: { date, invoiceNo: no, vehicle: intra ? 'TN 01 AB 1234' : 'TN 02 CD 5678' }, payments: paidOn < today ? [{ date: paidOn, amount: total, mode: 'NEFT' }] : [] });
+        }
+        maintenance.push({ id: `mt-${ym}`, machineId: 'bf2', date: `${ym}-17`, type: mi % 2 ? 'Preventive' : 'Breakdown', issue: mi % 2 ? 'Die cleaning and calibration' : 'Heater band replaced', cost: 3500 + Math.round(rnd() * 3000), status: 'Closed' });
+    });
+    const emps = [['EP001', 'Murugan S', 'Extrusion', 'Extrusion Operator', 19500], ['EP002', 'Divya K', 'Quality', 'QC Inspector', 22000], ['EP003', 'Senthil R', 'Cutting & Sealing', 'Machine Operator', 17500], ['EP004', 'Arul P', 'Stores', 'Storekeeper', 18000], ['EP005', 'Kavitha M', 'Admin', 'Accounts Executive', 25000]];
+    const employees = emps.map(([code, name, dept, desig, salary], i) => ({ id: `e${i + 1}`, code, unit: 'porur', name, dept, desig, salary, pf: true, esi: salary <= 21000, doj: `201${5 + i}-06-01`, status: 'Active' }));
+    const pay = {};
+    months.forEach(ym => {
+        pay[ym] = {};
+        employees.forEach((e, i) => {
+            const r = computePayRow({ salary: e.salary, pf: true, esi: e.esi, basicPct: 50 }, ym, 0);
+            pay[ym][e.id] = { paidOn: `${addMonths(ym, 1)}-0${2 + (i % 3)}`, snap: { gross: r.gross, basic: r.basic, pf: r.pf, esi: r.esi, pt: r.pt, ded: r.pf + r.esi + r.pt, net: r.net, erPf: r.erPf, erEsi: r.erEsi, lopDays: 0 } };
+        });
+    });
+    return { db: { sample: true, company: { name: 'Eco Pack Private Limited', gstin: makeGstin('33', 'AAACE1734G'), stateCode: '33', address: 'Arcot Road, Porur, Chennai' }, units: [{ id: 'porur', short: 'Porur' }], machines: [{ id: 'bf2', name: 'Blown Film Extruder 2' }], products, materials, customers, moves, production, orders, maintenance, employees, pay }, from: 'built-in demo data', vendorGstin: { [vendors.hdpe]: makeGstin('33', 'AAAFP4100K'), [vendors.ldpe]: makeGstin('33', 'AABCR5521D'), [vendors.rec]: makeGstin('33', 'AAAFR4107K') } };
+}
+const demoSource = k => k === 'staybay' ? demoStayBay() : demoEcoPack();
+
+// Business profiles for the two connected companies (what the ERP needs to know to apply the right rules)
+const LINKED_BIZ = {
+    staybay: { industry: 'hotel', maxTariff: 3500, hasRestaurant: false, specifiedOpt: false, turnoverLast: 14500000, turnoverExp: 16000000, employees: 8, cashPct: 20, investment: 30000000, scheme: 'regular', freq: 'monthly' },
+    ecopack: { industry: 'manufacturer', excludedGoods: false, b2bShare: 90, turnoverLast: 60000000, turnoverExp: 72000000, employees: 5, cashPct: 2, investment: 40000000, paidUp: 5000000, netWorth: 30000000, borrowings: 15000000, interstate: true, scheme: 'regular', freq: 'monthly' }
+};
+
+</script>
 <script>/* js/sample.js */
 'use strict';
 // ===================== We Create ERP · sample company =====================
@@ -5711,6 +6317,9 @@ function createSampleCompany() {
     recent.forEach((e, i) => { if (i % 6 !== 5) co.bankLines.push({ id: uid('bl'), accId: bank, date: addDays(e.date, i % 3 === 0 ? 1 : 0), desc: (vById(e.vid).narration || ledgerOf(vById(e.vid).partyId || vById(e.vid).ledgerId)?.name || 'Transfer').toUpperCase().slice(0, 40), amt: r2(e.dr - e.cr), ref: vById(e.vid).refNo || '', vid: '' }); });
     co.bankLines.push({ id: uid('bl'), accId: bank, date: addDays(today, -2), desc: 'SMS ALERT CHARGES', amt: -59, ref: '', vid: '' });
     if (`${startFy + 1}-09-30` < today) co.settings.lockDate = `${startFy + 1}-03-31`;   // last year audited and closed
+    // Business profile: an electrical wholesaler (regular GST, full input credit)
+    applyBusinessProfile({ ...bizDefaults(), industry: 'trader', turnoverLast: 62000000, turnoverExp: 68000000, employees: co.employees.length, cashPct: 3, b2bShare: 80, interstate: true, exports: true, paidUp: 1000000, netWorth: 4500000, borrowings: 600000, investment: 530000, scheme: 'regular', freq: 'monthly' }, { items: false, from: co.profile.booksFrom });
+    co.profile.sample = true;
     audit('Sample data loaded', { entity: 'Company', ref: co.profile.name, after: `${co.vouchers.length} vouchers` });
     saveCo();
     saveMeta();

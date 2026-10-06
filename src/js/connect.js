@@ -275,35 +275,55 @@ function autoSync() {
     const msgs = [];
     [['staybay', readStayBay, syncStayBay], ['ecopack', readEcoPack, syncEcoPack]].forEach(([k, read, sync]) => {
         const l = co.links[k];
-        if (!l?.auto || !read()) return;
-        try { const rep = sync(); if (Object.keys(rep.added).length) msgs.push(`${SOURCE_LABEL[k]}: ${reportText(rep)}`); } catch (e) { console.warn(e); }
+        const src = l?.auto && sourceOf(k, l);
+        if (!src) return;
+        try { const rep = sync(src); if (Object.keys(rep.added).length) msgs.push(`${SOURCE_LABEL[k]}: ${reportText(rep)}`); } catch (e) { console.warn(e); }
     });
     if (msgs.length) toast(`Synced — ${msgs.join(' · ')}`);
+}
+
+// Where a connected company's data comes from: the dashboard in this browser, a loaded backup, or the built-in demo
+const readSource = k => k === 'staybay' ? readStayBay() : readEcoPack();
+const sourceOf = (k, l) => l?.demo ? demoSource(k) : readSource(k);
+// Companies connected to a dashboard (each dashboard syncs only into its own company)
+function linkedCompanies(k) {
+    return meta.companies.filter(c => c.link === k || (c.link === undefined && loadCo(c.id)?.links?.[k])).map(c => ({ ...c, demo: Boolean(loadCo(c.id)?.links?.[k]?.demo) }));
 }
 
 // ---------- screen ----------
 function connectionsHtml() {
     const card = k => {
-        const S = SOURCES[k], l = linkOf(k), src = k === 'staybay' ? readStayBay() : readEcoPack();
+        const S = SOURCES[k], l = linkOf(k), src = sourceOf(k, l), real = readSource(k);
+        const head = `<div class="row" style="justify-content:space-between;align-items:flex-start"><div><h2 style="margin-bottom:4px">${esc(S.name)} ${l ? `<span class="badge good">Connected to this company</span>${l.demo ? ' <span class="badge warn">Demo data</span>' : ''}` : ''}</h2><p class="note">${esc(S.what)}</p></div>
+            <a class="btn btn-g btn-sm" href="${S.url}" target="_blank" rel="noopener">Open dashboard ↗</a></div>`;
+        const backup = `<label class="btn btn-s btn-sm" style="cursor:pointer">Load backup file<input type="file" accept=".json" hidden onchange="loadBackupFor('${k}', this)"></label>`;
+        if (!l) {
+            // This company is not the one for this dashboard: show where it syncs, or create its company
+            const others = linkedCompanies(k).filter(c => c.id !== co.id);
+            return `<div class="card">${head}<div class="note" style="margin:10px 0">${real ? `✓ ${SOURCE_LABEL[k]} data found (${esc(real.from)}).` : `No ${SOURCE_LABEL[k]} data in this browser yet — open the dashboard once here, or load its backup file.`} ${SOURCE_LABEL[k]} syncs only into its own company, never into ${esc(co.profile.name)}.</div>
+                ${others.length ? `<div class="row" style="flex-wrap:wrap;gap:8px;margin-bottom:8px">${others.map(c => `<button class="btn btn-s btn-sm" onclick="pickCompany('${c.id}');go('#/connect')">Open ${esc(c.name)}${c.demo ? ' (demo)' : ''} →</button>`).join('')}</div>` : ''}
+                <div class="row" style="margin-top:6px">${isAdmin() && (real || !others.length) ? `<button class="btn btn-p btn-sm" onclick="createLinkedCompany('${k}')">${real ? `Create a company for ${SOURCE_LABEL[k]} and connect` : `Create ${SOURCE_LABEL[k]} company with demo data`}</button>` : ''}${backup}</div></div>`;
+        }
         const counts = !src ? '' : k === 'staybay' ? `${src.employees.length} employees, ${new Set(src.employees.flatMap(e => Object.keys(e.payments || {}))).size} paid months` : `${(src.db.orders || []).filter(o => o.status === 'Dispatched').length} invoices, ${(src.db.moves || []).filter(m => m.kind === 'Purchase').length} purchases, ${(src.db.employees || []).length} employees`;
-        const needs = (l?.lastReport?.needs || []).filter(n => n.kind === 'vendorGstin' && !(l.vendorGstin || {})[n.name]);
-        return `<div class="card"><div class="row" style="justify-content:space-between;align-items:flex-start"><div><h2 style="margin-bottom:4px">${esc(S.name)} ${l ? '<span class="badge good">Connected</span>' : ''}</h2><p class="note">${esc(S.what)}</p></div>
-            <a class="btn btn-g btn-sm" href="${S.url}" target="_blank" rel="noopener">Open dashboard ↗</a></div>
-            <div class="note" style="margin:10px 0">${src ? `✓ Found data (${esc(src.from)}): ${esc(counts)}` : `No ${SOURCE_LABEL[k]} data in this browser. Open the dashboard on this computer and browser once, or load its backup file below.`}${l?.lastSync ? `<br>Last synced ${new Date(l.lastSync).toLocaleString('en-IN')} into <b>${esc(co.profile.name)}</b>.` : ''}</div>
-            ${needs.length ? `<div class="warns"><b>Supplier GSTINs needed.</b> Purchase bills from these suppliers are held back until you add their GSTIN (input GST can only be claimed from a registered supplier). Choose "Unregistered" if they really have no GSTIN.<div class="fg" style="margin-top:8px">${needs.map((n, i) => `<label class="f">${esc(n.name)} <span class="hint">${n.bills} bill(s)</span><input id="vg_${i}" data-name="${esc(n.name)}" maxlength="15" placeholder="GSTIN or URD" style="text-transform:uppercase"></label>`).join('')}</div>
+        const needs = (l.lastReport?.needs || []).filter(n => n.kind === 'vendorGstin' && !(l.vendorGstin || {})[n.name]);
+        return `<div class="card">${head}
+            <div class="note" style="margin:10px 0">${src ? `✓ Source: ${esc(src.from)} — ${esc(counts)}` : `No ${SOURCE_LABEL[k]} data in this browser. Open the dashboard on this computer and browser once, or load its backup file below.`}${l.lastSync ? `<br>Last synced ${new Date(l.lastSync).toLocaleString('en-IN')}.` : ''}</div>
+            ${l.demo && real && isAdmin() ? `<div class="warns">Your real ${SOURCE_LABEL[k]} data is in this browser. This company holds demo data — <a href="javascript:createLinkedCompany('${k}')">create a company for the real data</a> so the two never mix.</div>` : ''}
+            ${needs.length ? `<div class="warns"><b>Supplier GSTINs needed.</b> Purchase bills from these suppliers are held back until you add their GSTIN (input GST can only be claimed from a registered supplier). Type URD if a supplier really has no GSTIN.<div class="fg" style="margin-top:8px">${needs.map((n, i) => `<label class="f">${esc(n.name)} <span class="hint">${n.bills} bill(s)</span><input id="vg_${i}" data-name="${esc(n.name)}" maxlength="15" placeholder="GSTIN or URD" style="text-transform:uppercase"></label>`).join('')}</div>
                 <div class="row" style="margin-top:8px"><button class="btn btn-p btn-sm" onclick="saveVendorGstins()">Save & sync again</button>${l.sample ? '<button class="btn btn-g btn-sm" onclick="fillSampleGstins()">Use sample GSTINs (sample data only)</button>' : ''}</div></div>` : ''}
-            ${l?.lastReport?.failed?.length ? `<details><summary class="note" style="cursor:pointer">${l.lastReport.failed.length} record(s) not added — why</summary><div class="note">${l.lastReport.failed.map(esc).join('<br>')}</div></details>` : ''}
-            <div class="row" style="margin-top:10px">${canEdit() ? `<button class="btn btn-p" ${src ? '' : 'disabled'} onclick="runSync('${k}')">${l ? 'Sync now' : 'Connect & sync'}</button>` : ''}
-                <label class="btn btn-s btn-sm" style="cursor:pointer">Load backup file<input type="file" accept=".json" hidden onchange="loadBackupFor('${k}', this)"></label>
-                ${l ? `<label class="chk"><input type="checkbox" ${l.auto ? 'checked' : ''} onchange="linkOf('${k}').auto=this.checked;saveCo()"> Sync automatically when this company opens</label>` : ''}
-                ${k === 'staybay' && !l && isAdmin() ? `<button class="btn btn-g btn-sm" onclick="createLinkedCompany('staybay')">New company for STAY BAY</button>` : ''}${k === 'ecopack' && !l && isAdmin() ? `<button class="btn btn-g btn-sm" onclick="createLinkedCompany('ecopack')">New company for Eco Pack</button>` : ''}</div></div>`;
+            ${l.lastReport?.failed?.length ? `<details><summary class="note" style="cursor:pointer">${l.lastReport.failed.length} record(s) not added — why</summary><div class="note">${l.lastReport.failed.map(esc).join('<br>')}</div></details>` : ''}
+            <div class="row" style="margin-top:10px">${canEdit() ? `<button class="btn btn-p" ${src ? '' : 'disabled'} onclick="runSync('${k}')">Sync now</button>` : ''}${l.demo ? '' : backup}
+                <label class="chk"><input type="checkbox" ${l.auto ? 'checked' : ''} onchange="linkOf('${k}').auto=this.checked;saveCo()"> Sync automatically when this company opens</label></div></div>`;
     };
-    return `<p class="note" style="margin-bottom:12px">Data syncs into the company that is open now: <b>${esc(co.profile.name)}</b>. Connect STAY BAY to its own company and Eco Pack to its own company. Syncing again only adds what is new; nothing is ever posted twice.</p>${card('staybay')}${card('ecopack')}`;
+    return `<p class="note" style="margin-bottom:12px">Each dashboard has its own company in the ERP: STAY BAY (payroll) and Eco Pack (sales, purchases, production, payroll). Syncing again only adds what is new; nothing is ever posted twice. You are in <b>${esc(co.profile.name)}</b>.</p>${card('staybay')}${card('ecopack')}`;
 }
 function viewConnect() { $('#view').innerHTML = pageHead('Connected dashboards', 'Bring payroll from STAY BAY, and sales, purchases, production and payroll from Eco Pack, straight into the books.') + connectionsHtml(); }
 function runSync(k) {
     try {
-        const rep = k === 'staybay' ? syncStayBay() : syncEcoPack();
+        const l = linkOf(k);
+        if (!l) throw new Error(`${co.profile.name} is not connected to ${SOURCE_LABEL[k]}. Each dashboard syncs into its own company.`);
+        const src = sourceOf(k, l);
+        const rep = k === 'staybay' ? syncStayBay(src) : syncEcoPack(src);
         modal({ title: `Synced from ${SOURCE_LABEL[k]}`, body: `<p style="margin-bottom:10px">${esc(reportText(rep))}.</p>${Object.keys(rep.added).length ? `<ul style="margin-left:18px">${Object.entries(rep.added).map(([n, c]) => `<li>${c} ${esc(n)}</li>`).join('')}</ul>` : ''}${rep.needs.length ? `<div class="warns">${rep.needs.length} supplier(s) need a GSTIN before their bills are added — see the connection card.</div>` : ''}${rep.failed.length ? `<details style="margin-top:8px"><summary>${rep.failed.length} not added</summary><div class="note">${rep.failed.slice(0, 40).map(esc).join('<br>')}</div></details>` : ''}<p class="note" style="margin-top:10px">Every entry is posted to the ledgers, GST and statements and recorded in the audit trail.</p>`, foot: '<button class="btn btn-p" onclick="closeModal();route()">Done</button>' });
     } catch (e) { alert(e.message); }
 }
@@ -328,13 +348,14 @@ function fillSampleGstins() {
     (l.lastReport?.needs || []).forEach((n, i) => { l.vendorGstin[n.name] ||= makeGstin('33', `AAAFE${String(4100 + i * 7).padStart(4, '0')}K`); });
     saveCo(); runSync('ecopack');
 }
-function createLinkedCompany(k) {
-    if (limitReached('companies')) return upgradePrompt('More companies');
-    const S = k === 'staybay' ? readStayBay() : readEcoPack();
+// A company for a dashboard. demo: use the built-in demo data (when the dashboard's data is not in this browser).
+function buildLinkedCompany(k, demo) {
+    const S = demo ? demoSource(k) : readSource(k);
     let p;
     if (k === 'staybay') {
         const em = S?.employer || {};
         p = { name: em.name || 'STAY BAY Business Hotels', legalName: em.name || '', entity: 'Proprietorship', pan: panValid(em.pan) ? em.pan : '', tan: /^[A-Z]{4}\d{5}[A-Z]$/.test(em.tan || '') ? em.tan : '', state: '33', address: em.address || '', city: em.place || '' };
+        if (demo) Object.assign(p, { pan: 'AKXPS4821L', gstin: makeGstin('33', 'AKXPS4821L'), tan: 'CHES12345F', phone: '9840098400' });
         const months = (S?.employees || []).flatMap(e => Object.keys(e.payments || {})).sort();
         p.booksFrom = `${fyOf((months[0] || todayISO().slice(0, 7)) + '-01')}-04-01`;
     } else {
@@ -343,12 +364,39 @@ function createLinkedCompany(k) {
         p = { name: c.name || 'Eco Pack Private Limited', legalName: c.name || '', entity: 'Private Ltd', gstin: gstinValid(c.gstin || '') ? c.gstin : '', state: c.stateCode || '33', address: c.address || '', city: 'Chennai', booksFrom: `${fyOf(first)}-04-01`, aato: 60000000 };
         if (p.gstin) p.pan = p.gstin.slice(2, 12);
     }
+    if (demo) p.name += ' (demo)';
     const c = newCompanyData(p);
     co = c;
-    meta.companies.push({ id: c.id, name: p.name, gstin: p.gstin || '' });
-    audit('Company created', { entity: 'Company', ref: p.name, after: `For the ${SOURCE_LABEL[k]} connection` });
-    co.links = { [k]: { auto: true, vendorGstin: {} } };
+    meta.companies.push({ id: c.id, name: p.name, gstin: p.gstin || '', link: k });
+    audit('Company created', { entity: 'Company', ref: p.name, after: `For the ${SOURCE_LABEL[k]} connection${demo ? ' (demo data)' : ''}` });
+    co.links = { [k]: { auto: true, vendorGstin: { ...(S?.vendorGstin || {}) }, demo: Boolean(demo) } };
+    if (demo) {   // a funded bank account so the demo payments have money to come from
+        const bank = saveAccount({ name: k === 'staybay' ? 'Indian Bank Current A/c' : 'IOB Current A/c', group: 'bank', openDr: k === 'staybay' ? 2500000 : 4000000, openCr: 0 });
+        sysAcc('capital').openCr = r2((Number(sysAcc('capital').openCr) || 0) + bank.openDr);
+        co.links[k].bank = bank.id;
+    }
+    // What kind of business it is, so the right GST, credit and compliance rules apply from day one
+    const n = k === 'staybay' ? (S?.employees || []).length : (S?.db?.employees || []).length;
+    applyBusinessProfile({ ...bizDefaults(), ...LINKED_BIZ[k], employees: n || LINKED_BIZ[k].employees, ...(demo ? {} : { turnoverLast: 0, turnoverExp: 0 }) }, { from: p.booksFrom });
+    let rep = null;
+    if (S) rep = k === 'staybay' ? syncStayBay(S) : syncEcoPack(S);
     saveCo(); saveMeta();
-    state.fy = defaultFy();
-    runSync(k);
+    return { company: c, rep };
+}
+function createLinkedCompany(k) {
+    if (limitReached('companies')) return upgradePrompt('More companies');
+    const real = readSource(k);
+    try {
+        buildLinkedCompany(k, !real);
+        state.fy = defaultFy();
+        go('#/connect');
+        toast(`${co.profile.name} created and connected${real ? '' : ' with demo data'}.`);
+    } catch (e) { alert(e.message); }
+}
+// The sample workspace: the sample trading company plus STAY BAY and Eco Pack, each in its own connected company
+function createSampleWorkspace() {
+    const saved = co;
+    createSampleCompany();
+    ['staybay', 'ecopack'].forEach(k => { try { buildLinkedCompany(k, !readSource(k)); } catch (e) { console.warn(k, e); } });
+    co = saved; ver++;
 }

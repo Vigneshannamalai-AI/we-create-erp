@@ -79,10 +79,11 @@ function gstr3b(ym) {
     const sales = activeIn(['SI'], ym), notes = activeIn(['CN'], ym), bills = activeIn(['PB'], ym), dns = activeIn(['DN'], ym);
     const z = () => ({ txval: 0, iamt: 0, camt: 0, samt: 0 });
     const add = (t, v, s) => { t.txval += s * v.totals.taxable; t.iamt += s * v.totals.igst; t.camt += s * v.totals.cgst; t.samt += s * v.totals.sgst; };
-    const a = z(), b = z(), c = z(), d = z(), itcRcm = z(), itcOther = z(), ineligible = z(), reversal = z();
+    const a = z(), b = z(), c = z(), d = z(), eco = z(), itcRcm = z(), itcOther = z(), ineligible = z(), reversal = z();
     const interUnreg = {};
     [[sales, 1], [notes, -1]].forEach(([list, s]) => list.forEach(v => {
         if (v.kind === 'EXP' || v.kind === 'SEZ') add(b, v, s);
+        else if (v.totals.tax === 0 && (v.lines || []).length && v.lines.every(l => l.eco95)) add(eco, v, s);   // 3.1.1(ii): through a food app, s.9(5)
         else if (v.totals.tax === 0) add(c, v, s);
         else add(a, v, s);
         if (v.kind === 'B2C' && v.totals.inter) { const x = interUnreg[v.pos] ||= { pos: v.pos, txval: 0, iamt: 0 }; x.txval += s * v.totals.taxable; x.iamt += s * v.totals.igst; }
@@ -90,7 +91,7 @@ function gstr3b(ym) {
     const basis = has2b(ym) ? '2B' : 'books';
     const deferred = z();
     bills.forEach(v => {
-        if (v.rcm) { add(d, v, 1); add(itcRcm, v, 1); return; }
+        if (v.rcm) { add(d, v, 1); add(v.itc === false ? ineligible : itcRcm, v, 1); return; }
         if (v.itc === false) { add(ineligible, v, 1); return; }
         if (v.totals.tax && (basis === 'books' || !isRegistered(contactById(v.partyId)))) add(itcOther, v, 1);
     });
@@ -100,15 +101,24 @@ function gstr3b(ym) {
     });
     dns.forEach(v => { if (!v.rcm && v.itc !== false && v.totals.tax) add(reversal, v, 1); });
     const R = o => Object.fromEntries(Object.entries(o).map(([k, x]) => [k, r2(x)]));
+    // Rule 42: with both credit and no-credit / exempt supplies, common credit is reversed in the ratio of that turnover
+    const rule42 = z();
+    let ratio42 = 0;
+    if (co.profile.itcPolicy === 'mixed') {
+        const lineTot = (f) => sum(sales, v => sum((v.lines || []).filter(f), 'taxable')) - sum(notes, v => sum((v.lines || []).filter(f), 'taxable'));
+        const all = lineTot(() => true), no = lineTot(l => { const it = itemById(l.itemId); return it?.noItc || it?.exempt; });
+        ratio42 = all > 0 ? Math.min(1, Math.max(0, no / all)) : 0;
+        rule42.iamt = (itcOther.iamt + itcRcm.iamt) * ratio42; rule42.camt = (itcOther.camt + itcRcm.camt) * ratio42; rule42.samt = (itcOther.samt + itcRcm.samt) * ratio42;
+    }
     const itcAvail = R({ iamt: itcRcm.iamt + itcOther.iamt, camt: itcRcm.camt + itcOther.camt, samt: itcRcm.samt + itcOther.samt });
     // Credit left over from earlier months (what is still in the input ledgers at the end of last month)
     const prevEnd = lastDay(addMonths(ym, -1));
     const pend = itcPending(addMonths(ym, -1));
     const carryIn = R({ iamt: Math.max(0, balance(sysId('inIgst'), prevEnd) - pend.iamt), camt: Math.max(0, balance(sysId('inCgst'), prevEnd) - pend.camt), samt: Math.max(0, balance(sysId('inSgst'), prevEnd) - pend.samt) });
-    const itcNet = R({ iamt: itcAvail.iamt - reversal.iamt + carryIn.iamt, camt: itcAvail.camt - reversal.camt + carryIn.camt, samt: itcAvail.samt - reversal.samt + carryIn.samt });
+    const itcNet = R({ iamt: itcAvail.iamt - reversal.iamt - rule42.iamt + carryIn.iamt, camt: itcAvail.camt - reversal.camt - rule42.camt + carryIn.camt, samt: itcAvail.samt - reversal.samt - rule42.samt + carryIn.samt });
     const liab = R({ iamt: a.iamt + b.iamt, camt: a.camt, samt: a.samt });
     const rcmLiab = R({ iamt: d.iamt, camt: d.camt, samt: d.samt });
-    return { ym, basis, deferred: R(deferred), carryIn, a: R(a), b: R(b), c: R(c), d: R(d), interUnreg: Object.values(interUnreg).map(R), itcRcm: R(itcRcm), itcOther: R(itcOther), reversal: R(reversal), ineligible: R(ineligible), itcAvail, itcNet, liab, rcmLiab, setoff: setOff(liab, itcNet, rcmLiab) };
+    return { ym, basis, deferred: R(deferred), carryIn, a: R(a), b: R(b), c: R(c), d: R(d), eco: R(eco), rule42: R(rule42), ratio42, interUnreg: Object.values(interUnreg).map(R), itcRcm: R(itcRcm), itcOther: R(itcOther), reversal: R(reversal), ineligible: R(ineligible), itcAvail, itcNet, liab, rcmLiab, setoff: setOff(liab, itcNet, rcmLiab) };
 }
 // Rule 88A order: IGST credit first (IGST, then CGST/SGST); CGST credit → CGST then IGST; SGST credit → SGST then IGST. RCM is paid in cash.
 function setOff(liab, itc, rcm) {
@@ -147,8 +157,10 @@ function postSetOff(ym) {
     const cr = (k, amt) => amt && L.push({ acc: sysId(k), dr: 0, cr: amt });
     dr('outIgst', r2(u.iamt.iamt + u.camt.iamt + u.samt.iamt)); dr('outCgst', r2(u.iamt.camt + u.camt.camt)); dr('outSgst', r2(u.iamt.samt + u.samt.samt));
     cr('inIgst', r2(u.iamt.iamt + u.iamt.camt + u.iamt.samt)); cr('inCgst', r2(u.camt.camt + u.camt.iamt)); cr('inSgst', r2(u.samt.samt + u.samt.iamt));
+    const r42 = g.rule42, rev = r2(r42.iamt + r42.camt + r42.samt);
+    if (rev) { dr('itcRev', rev); cr('inIgst', r42.iamt); cr('inCgst', r42.camt); cr('inSgst', r42.samt); }
     if (L.length < 2) throw new Error('There is no input tax credit to set off for this month.');
-    return saveVoucher({ type: 'JV', date: lastDay(ym), jlines: L, narration: `GST input tax credit set off against output tax for ${ymLabel(ym)} (GSTR-3B, Rule 88A order)` }, { source: 'GSTR-3B set-off' });
+    return saveVoucher({ type: 'JV', date: lastDay(ym), jlines: L, narration: `GST input tax credit set off against output tax for ${ymLabel(ym)} (GSTR-3B, Rule 88A order)${rev ? `; common credit ${inr(rev)} reversed under Rule 42 (${(g.ratio42 * 100).toFixed(1)}% no-credit turnover)` : ''}` }, { source: 'GSTR-3B set-off' });
 }
 
 // ---------- e-invoice (INV-01 schema) and a TEST IRN ----------
@@ -376,16 +388,21 @@ function complianceItems(fy) {
     const hasTds = Boolean(co.profile.tan) || co.vouchers.some(v => v.tds?.amount);
     const hasTcs = co.vouchers.some(v => v.tcs?.amount) || co.contacts.some(c => c.tcsSection);
     const qrmp = co.profile.gstFreq === 'quarterly';
+    const comp = co.profile.gstType === 'composition';
     const tdsReg = taxRegister('tds', fy), tcsReg = taxRegister('tcs', fy);
     // QRMP GSTR-3B: the 22nd for these states, the 24th for the rest
     const day3b = ['22', '23', '24', '26', '27', '29', '30', '31', '32', '33', '34', '35', '36', '37'].includes(co.profile.state) ? '22' : '24';
     fyMonths(fy).forEach(ym => {
         const next = addMonths(ym, 1);
-        if (hasGst && !qrmp) {
+        if (hasGst && comp) {
+            const q = quarterOf(ym);
+            if (QUARTERS[q].at(-1) === Number(ym.slice(5))) add('CMP-08', `${q}-${fy}`, `${next}-18`, `CMP-08 composition tax · ${q} ending ${ymLabel(ym)}`, 'CGST Rule 62');
+        }
+        if (hasGst && !comp && !qrmp) {
             add('GSTR-1', ym, `${next}-11`, `GSTR-1 · ${ymLabel(ym)}`, 'CGST Act s.37');
             add('GSTR-3B', ym, `${next}-20`, `GSTR-3B · ${ymLabel(ym)}`, 'CGST Act s.39');
         }
-        if (hasGst && qrmp) {
+        if (hasGst && !comp && qrmp) {
             const q = quarterOf(ym), last = QUARTERS[q].at(-1) === Number(ym.slice(5));
             if (last) {
                 add('GSTR-1', `${q}-${fy}`, `${next}-13`, `GSTR-1 (quarterly) · ${q} ending ${ymLabel(ym)}`, 'CGST Act s.37 · QRMP');
@@ -414,7 +431,8 @@ function complianceItems(fy) {
         if (hasTcs) add('FORM-143', `${q}-${fy}`, returnDue(fy, q), `TCS return Form 143 (old 27EQ) · ${q}`, 'Income-tax Act 2025 s.397');
     });
     [['15%', `${fy}-06-15`], ['45%', `${fy}-09-15`], ['75%', `${fy}-12-15`], ['100%', `${fy + 1}-03-15`]].forEach(([p, d]) => add('ADV-TAX', `${p}-${fy}`, d, `Advance tax instalment (${p})`, 'Income-tax Act 2025'));
-    if (hasGst) add('GSTR-9', `FY-${fy}`, `${fy + 1}-12-31`, `GSTR-9 annual return · FY ${fyLabel(fy)}`, 'CGST Act s.44');
+    if (hasGst && comp) add('GSTR-4', `FY-${fy}`, `${fy + 1}-06-30`, `GSTR-4 composition annual return · FY ${fyLabel(fy)}`, 'CGST Act s.39(2)');
+    else if (hasGst) add('GSTR-9', `FY-${fy}`, `${fy + 1}-12-31`, `GSTR-9 annual return · FY ${fyLabel(fy)}${(Number(co.profile.aato) || 0) <= 20000000 ? ' (optional up to ₹2 crore)' : ''}`, 'CGST Act s.44');
     if (/Ltd/.test(co.profile.entity)) { add('MSME-1', `H1-${fy}`, `${fy}-10-31`, 'MSME-1 (Apr–Sep dues)', 'Companies Act s.405'); add('MSME-1', `H2-${fy}`, `${fy + 1}-04-30`, 'MSME-1 (Oct–Mar dues)', 'Companies Act s.405'); }
     const t = todayISO();
     items.forEach(i => { i.state = i.filed ? 'filed' : i.due < t ? 'overdue' : daysBetween(t, i.due) <= 7 ? 'soon' : 'upcoming'; });
@@ -640,11 +658,12 @@ function gstr3bJson(ym) {
     return {
         gstin: co.profile.gstin, ret_period: ym.slice(5) + ym.slice(0, 4),
         sup_details: { osup_det: t(g.a), osup_zero: t(g.b), osup_nil_exmp: t(g.c), isup_rev: t(g.d), osup_nongst: t({}) },
+        eco_dtls: { eco_sup: t({}), eco_reg_sup: t(g.eco) },
         inter_sup: { unreg_details: g.interUnreg.map(x => ({ pos: x.pos, txval: r2(x.txval), iamt: r2(x.iamt) })), comp_details: [], uin_details: [] },
         itc_elg: {
             itc_avl: [{ ty: 'IMPG', ...tx({}) }, { ty: 'IMPS', ...tx({}) }, { ty: 'ISRC', ...tx(g.itcRcm) }, { ty: 'ISD', ...tx({}) }, { ty: 'OTH', ...tx(g.itcOther) }],
-            itc_rev: [{ ty: 'RUL', ...tx({}) }, { ty: 'OTH', ...tx(g.reversal) }],
-            itc_net: tx({ iamt: g.itcAvail.iamt - g.reversal.iamt, camt: g.itcAvail.camt - g.reversal.camt, samt: g.itcAvail.samt - g.reversal.samt }),
+            itc_rev: [{ ty: 'RUL', ...tx(g.rule42) }, { ty: 'OTH', ...tx(g.reversal) }],
+            itc_net: tx({ iamt: g.itcAvail.iamt - g.reversal.iamt - g.rule42.iamt, camt: g.itcAvail.camt - g.reversal.camt - g.rule42.camt, samt: g.itcAvail.samt - g.reversal.samt - g.rule42.samt }),
             itc_inelg: [{ ty: 'RUL', ...tx(g.ineligible) }, { ty: 'OTH', ...tx({}) }]
         },
         inward_sup: { isup_details: [{ ty: 'GST', inter: 0, intra: 0 }, { ty: 'NONGST', inter: 0, intra: 0 }] }

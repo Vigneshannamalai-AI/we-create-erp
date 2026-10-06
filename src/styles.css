@@ -368,3 +368,15 @@ select{max-width:100%}
 
 .steps{margin:6px 0 4px 20px;line-height:1.75;font-size:13.5px}
 .steps li{padding-left:2px}
+
+/* business profile */
+.inds{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:8px}
+.ind{display:flex;align-items:center;gap:10px;text-align:left;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--card,#fff);font:inherit;font-size:13px;color:inherit;cursor:pointer;min-height:48px}
+.ind span{font-size:20px;flex:none}
+.ind:hover{border-color:var(--brand)}
+.ind.on{border-color:var(--brand);background:var(--brand-soft);font-weight:600}
+.rules{list-style:none;margin:0;padding:0}
+.rules li{padding:8px 0;border-top:1px solid var(--line)}
+.rules li:first-child{border-top:0}
+.rules .note{margin-top:2px}
+@media (max-width:700px){.inds{grid-template-columns:1fr 1fr}.ind{font-size:12px;padding:8px}}

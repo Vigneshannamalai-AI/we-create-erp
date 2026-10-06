@@ -343,6 +343,107 @@ Grand Total                                     14,632.00`;
         const bad = co.vouchers.filter(v => !near(sum(postingsOf(v), 'dr'), sum(postingsOf(v), 'cr')));
         return (!bad.length && verifyChain(co.audit).ok) || bad.map(v => v.no).join(',');
     });
+
+    // ---------- business profile: the ERP adapts rates, credit and returns to the business ----------
+    const B = (x) => ({ ...bizDefaults(), turnoverLast: 0, turnoverExp: 0, employees: 0, cashPct: 10, ...x });
+    const has = (R, re, level) => R.some(r => re.test(r.title) && (!level || r.level === level));
+    check('Rules: small hotel rooms are 5% without credit; above ₹7,500 → 18% with credit (Rule 42 when mixed)', () => {
+        const lo = B({ industry: 'hotel', maxTariff: 3500 }), hi = B({ industry: 'hotel', maxTariff: 9000, hasRestaurant: true });
+        const s1 = INDUSTRIES.hotel.supplies(lo), s2 = INDUSTRIES.hotel.supplies(hi);
+        return (itcPolicyOf(lo) === 'none' && s1[0].rate === 5 && !s1[0].itc && itcPolicyOf(hi) === 'mixed' && s2.some(x => x.rate === 18 && x.itc) && s2.find(x => /Restaurant/.test(x.name)).rate === 18) || JSON.stringify([itcPolicyOf(lo), itcPolicyOf(hi)]);
+    });
+    check('Rules: composition — 1% for a small B2C trader, refused above ₹1.5 crore or with inter-state sales; 5% restaurants; 6% services up to ₹50 lakh', () => {
+        const t = compositionOf(B({ industry: 'trader', turnoverLast: 9000000, b2bShare: 10 }));
+        return (t.eligible && t.rate === 1 && t.recommended && !compositionOf(B({ industry: 'trader', turnoverLast: 16000000 })).eligible && !compositionOf(B({ industry: 'trader', turnoverLast: 5000000, interstate: true })).eligible
+            && compositionOf(B({ industry: 'restaurant', turnoverLast: 5000000 })).rate === 5 && compositionOf(B({ industry: 'professional', turnoverLast: 4000000 })).rate === 6 && !compositionOf(B({ industry: 'professional', turnoverLast: 6000000 })).eligible) || JSON.stringify(t);
+    });
+    check('Rules: size thresholds (registration, GSTR-9, e-invoice, tax audit, presumptive, PF/ESI)', () => {
+        const small = businessRules(B({ industry: 'trader', turnoverLast: 3000000, employees: 4 }), { state: '33', entity: 'Proprietorship' });
+        const big = businessRules(B({ industry: 'trader', turnoverLast: 60000000, employees: 25 }), { state: '33', entity: 'Proprietorship', aato: 60000000 });
+        const pro = businessRules(B({ industry: 'professional', turnoverLast: 4000000 }), { state: '33', entity: 'Proprietorship' });
+        const ok = has(small, /registration optional/) && has(small, /GSTR-9 optional/) && has(small, /old 44AD/) && has(small, /Tax audit not needed/) && !has(small, /Provident Fund \(EPF\) compulsory/)
+            && has(big, /registration compulsory/) && has(big, /E-invoicing/, 'must') && has(big, /^Tax audit$/, 'must') && has(big, /GSTR-9C/) && has(big, /EPF/, 'must') && has(big, /ESI compulsory/) && !has(big, /old 44AD/)
+            && has(pro, /old 44ADA/);
+        return ok || [small, big, pro].map(R => R.map(r => r.title).join(' | ')).join(' ### ');
+    });
+    check('Rules: small private company — no cash flow statement, no CARO', () => { const R = businessRules(B({ industry: 'manufacturer', turnoverLast: 30000000, paidUp: 1000000 }), { state: '33', entity: 'Private Ltd' }); return has(R, /^Small company$/) && /cash flow statement is not mandatory/.test(R.find(r => r.title === 'Small company').text); });
+
+    check('Hotel books: GST on purchases (incl. reverse charge) becomes cost; GSTR-3B claims no credit', () => {
+        fresh('Hotel test');
+        saveAccount({ name: 'SBI', group: 'bank', openDr: 500000, openCr: 0 }); sysAcc('capital').openCr = 500000;
+        applyBusinessProfile(B({ industry: 'hotel', maxTariff: 3500 }), { from: `${fy}-04-01` });
+        const room = co.items.find(i => /up to ₹7,500/.test(i.name));
+        const guest = saveContact({ type: 'customer', name: 'Walk-in guest', state: '33' });
+        const ven = saveContact({ type: 'vendor', name: 'Linen Supplier', gstin: makeGstin('33', 'AAAFL1234K'), state: '33' });
+        const adv = saveContact({ type: 'vendor', name: 'Advocate R', state: '33' });
+        const d = `${fy}-05-10`;
+        const si = saveVoucher({ type: 'SI', date: d, partyId: guest.id, lines: [{ itemId: room.id, desc: room.name, hsn: room.hsn, qty: 10, rate: 3000, gstRate: room.gstRate }] });
+        const pb = saveVoucher({ type: 'PB', date: d, partyId: ven.id, refNo: 'LS-1', lines: [{ desc: 'Bed linen', hsn: '6302', qty: 10, rate: 1000, gstRate: 5 }] });
+        const rc = saveVoucher({ type: 'PB', date: d, partyId: adv.id, refNo: 'ADV-1', rcm: true, lines: [{ desc: 'Legal fees', hsn: '998212', qty: 1, rate: 20000, gstRate: 18 }] });
+        const g = gstr3b(`${fy}-05`);
+        return (si.totals.tax === 1500 && pb.itc === false && rc.itc === false && g.itcAvail.camt === 0 && near(g.ineligible.camt + g.ineligible.samt, 500 + 3600) && near(g.d.camt, 1800) && near(balance(sysId('inCgst')), 0)) || JSON.stringify({ tax: si.totals.tax, pbItc: pb.itc, avail: g.itcAvail, inel: g.ineligible });
+    });
+    check('Hotel with rooms above ₹7,500: common credit reversed under Rule 42 and posted', () => {
+        fresh('Hotel mixed test');
+        saveAccount({ name: 'SBI', group: 'bank', openDr: 500000, openCr: 0 }); sysAcc('capital').openCr = 500000;
+        applyBusinessProfile(B({ industry: 'hotel', maxTariff: 9000 }), { from: `${fy}-04-01` });
+        const lo = co.items.find(i => /up to ₹7,500/.test(i.name)), hi = co.items.find(i => /above ₹7,500/.test(i.name));
+        const guest = saveContact({ type: 'customer', name: 'Guest', state: '33' });
+        const ven = saveContact({ type: 'vendor', name: 'AC Service', gstin: makeGstin('33', 'AAAFA1234K'), state: '33' });
+        const d = `${fy}-06-10`;
+        saveVoucher({ type: 'SI', date: d, partyId: guest.id, lines: [{ itemId: lo.id, desc: lo.name, hsn: lo.hsn, qty: 20, rate: 5000, gstRate: 5 }, { itemId: hi.id, desc: hi.name, hsn: hi.hsn, qty: 10, rate: 10000, gstRate: 18 }] });
+        saveVoucher({ type: 'PB', date: d, partyId: ven.id, refNo: 'AC-1', lines: [{ desc: 'AC maintenance', hsn: '998719', qty: 1, rate: 100000, gstRate: 18 }] });
+        const g = gstr3b(`${fy}-06`);
+        const jv = postSetOff(`${fy}-06`);
+        const rev = sum(postingsOf(jv).filter(p => p.acc === sysId('itcRev')), 'dr');
+        return (near(g.ratio42, 0.5) && near(g.rule42.camt + g.rule42.samt, 9000) && near(rev, 9000) && near(g.itcNet.camt + g.itcNet.samt, 9000) && gstr3bJson(`${fy}-06`).itc_elg.itc_rev[0].camt === 4500) || JSON.stringify({ r: g.ratio42, r42: g.rule42, net: g.itcNet, rev });
+    });
+    check('Food-app orders: no GST on our bill, reported in GSTR-3B 3.1.1(ii)', () => {
+        fresh('Restaurant test');
+        applyBusinessProfile(B({ industry: 'restaurant', aggregator: true }), { from: `${fy}-04-01` });
+        const it = co.items.find(i => i.eco95);
+        const app = saveContact({ type: 'customer', name: 'Food App Pvt Ltd', gstin: makeGstin('29', 'AABCF1234K'), state: '29' });
+        const v = saveVoucher({ type: 'SI', date: `${fy}-07-05`, partyId: app.id, lines: [{ itemId: it.id, desc: it.name, hsn: it.hsn, qty: 1, rate: 50000, gstRate: 5 }] });
+        const g = gstr3b(`${fy}-07`);
+        return (v.totals.tax === 0 && g.eco.txval === 50000 && g.c.txval === 0 && gstr3bJson(`${fy}-07`).eco_dtls.eco_reg_sup.txval === 50000 && co.profile.itcPolicy === 'none') || JSON.stringify({ tax: v.totals.tax, eco: g.eco, c: g.c });
+    });
+    check('Composition dealer: bill of supply without GST, 1% tax by CMP-08, GSTR-4 instead of GSTR-1/3B', () => {
+        fresh('Composition test', { gstin: makeGstin('33', 'ABCPC1234D') });
+        saveAccount({ name: 'SBI', group: 'bank', openDr: 200000, openCr: 0 }); sysAcc('capital').openCr = 200000;
+        const r = applyBusinessProfile(B({ industry: 'trader', turnoverLast: 8000000, b2bShare: 5, scheme: 'composition' }), { from: `${fy}-04-01` });
+        const cu = saveContact({ type: 'customer', name: 'Retail customer', state: '33' });
+        const ven = saveContact({ type: 'vendor', name: 'Distributor', gstin: makeGstin('33', 'AAAFD1234K'), state: '33' });
+        const si = saveVoucher({ type: 'SI', date: `${fy}-04-15`, partyId: cu.id, lines: [{ desc: 'Switches', hsn: '8536', qty: 100, rate: 1000, gstRate: 18 }] });
+        const pb = saveVoucher({ type: 'PB', date: `${fy}-04-10`, partyId: ven.id, refNo: 'D-1', lines: [{ desc: 'Switches', hsn: '8536', qty: 100, rate: 800, gstRate: 18 }] });
+        const c = cmp08(fy, 'Q1');
+        const jv = postCompositionTax(fy, 'Q1');
+        const cal = complianceItems(fy).map(i => i.type);
+        return (r.scheme === 'composition' && si.totals.tax === 0 && pb.itc === false && c.tax === 1000 && near(balance(sysId('compTax')), 1000) && near(-balance(sysId('compPay')), 1000) && jv && cal.includes('CMP-08') && cal.includes('GSTR-4') && !cal.includes('GSTR-3B') && !cal.includes('GSTR-1') && throws(() => postCompositionTax(fy, 'Q1'), /already posted/)) || JSON.stringify({ c, cal: [...new Set(cal)] });
+    });
+
+    // ---------- sample workspace: STAY BAY and Eco Pack get their own connected companies ----------
+    check('Sample workspace: STAY BAY and Eco Pack companies are created and connected (demo data), not the sample company', () => {
+        const n = meta.companies.length;
+        const sb = buildLinkedCompany('staybay', true).company;
+        const sbOk = sb.links.staybay?.demo && sb.profile.biz.industry === 'hotel' && sb.profile.itcPolicy === 'none' && Object.keys(sb.payroll).length >= 1 && near(balance(sysId('salPay')), 0);
+        const sbBs = bsData(today);
+        const ep = buildLinkedCompany('ecopack', true).company;
+        const epB = bsData(today), inv = ep.vouchers.filter(v => v.type === 'SI').length, bills = ep.vouchers.filter(v => v.type === 'PB').length, prod = ep.vouchers.filter(v => v.type === 'SJ').length;
+        const ok = sbOk && near(sbBs.totalEL, sbBs.totalA) && near(epB.totalEL, epB.totalA) && inv > 0 && bills > 0 && prod > 0 && !ep.links.ecopack.lastReport.needs.length && ep.profile.biz.industry === 'manufacturer'
+            && meta.companies.length === n + 2 && meta.companies.slice(-2).map(c => c.link).join() === 'staybay,ecopack' && !Object.keys(home.links || {}).length;
+        return ok || JSON.stringify({ sbOk, inv, bills, prod, needs: ep.links.ecopack.lastReport.needs, sbBs: [sbBs.totalEL, sbBs.totalA], ep: [epB.totalEL, epB.totalA], fails: ep.links.ecopack.lastReport.failed.slice(0, 3) });
+    });
+    check('Demo re-sync adds nothing; a company not connected to a dashboard refuses to sync', () => {
+        const n = co.vouchers.length;
+        autoSync();
+        const same = co.vouchers.length === n;
+        const sbId = meta.companies.find(c => c.link === 'staybay').id;
+        co = home;
+        let refused = false;
+        try { const l = linkOf('staybay'); if (!l) throw new Error('not connected'); } catch (e) { refused = true; }
+        const listed = linkedCompanies('staybay').some(c => c.id === sbId);
+        return (same && refused && listed) || JSON.stringify({ same, refused, listed });
+    });
     co = home; ver++;
 
     // ---------- screens ----------
@@ -351,7 +452,7 @@ Grand Total                                     14,632.00`;
         '#/report/pl', '#/report/bs', '#/report/cf', '#/report/tb', '#/report/daybook', '#/report/ledger', '#/report/stock', '#/report/ageing-r', '#/report/ageing-p', '#/report/msme', '#/report/salesreg', '#/report/purchreg', '#/report/hsn',
         '#/gst/r1', '#/gst/r3b', '#/gst/2b', '#/gst/ein', '#/gst/health', '#/tds', '#/bank', '#/calendar', '#/audit', '#/settings/company', '#/settings/numbering', '#/settings/users', '#/settings/backup',
         '#/new/SI', '#/new/PB', '#/new/CN', '#/new/DN', '#/new/RC', '#/new/PY', '#/new/JV', '#/new/CT',
-        '#/manual', '#/billing', '#/payroll', '#/connect', '#/gst/plan', '#/gst/gstr9', '#/new/SJ', '#/settings/invoice', '#/settings/tax', '#/settings/prefs', '#/settings/reminders', '#/settings/import'];
+        '#/manual', '#/billing', '#/payroll', '#/connect', '#/business', '#/gst/plan', '#/gst/gstr9', '#/new/SJ', '#/settings/invoice', '#/settings/tax', '#/settings/prefs', '#/settings/reminders', '#/settings/import'];
     const sampleV = ['SI', 'PB', 'CN', 'DN', 'RC', 'PY', 'JV', 'CT'].map(t => co.vouchers.find(v => v.type === t)).filter(Boolean);
     pages.push(...sampleV.map(v => `#/v/${v.id}`));
     const failed = [];

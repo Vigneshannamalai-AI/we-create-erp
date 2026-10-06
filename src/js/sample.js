@@ -224,6 +224,9 @@ function createSampleCompany() {
     recent.forEach((e, i) => { if (i % 6 !== 5) co.bankLines.push({ id: uid('bl'), accId: bank, date: addDays(e.date, i % 3 === 0 ? 1 : 0), desc: (vById(e.vid).narration || ledgerOf(vById(e.vid).partyId || vById(e.vid).ledgerId)?.name || 'Transfer').toUpperCase().slice(0, 40), amt: r2(e.dr - e.cr), ref: vById(e.vid).refNo || '', vid: '' }); });
     co.bankLines.push({ id: uid('bl'), accId: bank, date: addDays(today, -2), desc: 'SMS ALERT CHARGES', amt: -59, ref: '', vid: '' });
     if (`${startFy + 1}-09-30` < today) co.settings.lockDate = `${startFy + 1}-03-31`;   // last year audited and closed
+    // Business profile: an electrical wholesaler (regular GST, full input credit)
+    applyBusinessProfile({ ...bizDefaults(), industry: 'trader', turnoverLast: 62000000, turnoverExp: 68000000, employees: co.employees.length, cashPct: 3, b2bShare: 80, interstate: true, exports: true, paidUp: 1000000, netWorth: 4500000, borrowings: 600000, investment: 530000, scheme: 'regular', freq: 'monthly' }, { items: false, from: co.profile.booksFrom });
+    co.profile.sample = true;
     audit('Sample data loaded', { entity: 'Company', ref: co.profile.name, after: `${co.vouchers.length} vouchers` });
     saveCo();
     saveMeta();

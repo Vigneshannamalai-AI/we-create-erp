@@ -107,7 +107,7 @@ function showAuth(msg = '') {
             <label class="f">Username<input id="a_user" required autocomplete="username"></label>
             <label class="f">Password <span class="hint">At least ${MIN_PASSWORD} characters</span><input id="a_pass" type="password" autocomplete="new-password"></label>
             <label class="f">Type the password again<input id="a_pass2" type="password" autocomplete="new-password"></label>
-            <label class="chk"><input type="checkbox" id="a_sample" checked> Add a sample company with a few months of entries to try it out</label></div>`
+            <label class="chk"><input type="checkbox" id="a_sample" checked> Add sample companies to try it out (a trading company, plus STAY BAY and Eco Pack connected to their dashboards)</label></div>`
         : `<h2>Sign in</h2><p class="lead">${esc(msg) || 'Welcome back.'}</p>
             <div class="fg" style="grid-template-columns:1fr">
             <label class="f">Username<input id="a_user" autocomplete="username" autofocus></label>
@@ -137,7 +137,7 @@ function setupOwner() {
     auditMeta('Owner account created', { entity: 'User', ref: user });
     const code = setRecovery(me);
     saveMeta();
-    if (chk('a_sample')) createSampleCompany();
+    if (chk('a_sample')) createSampleWorkspace();
     enterApp();
     showRecoveryCode(code, 'This is your recovery code. If you ever forget your username or password, use it on the sign-in screen under "Forgot username or password?". It is shown only once.');
 }
@@ -322,6 +322,7 @@ async function changePassword() {
 const ROUTES = [
     [/^#\/companies$/, () => viewCompanies(), true],
     [/^#\/dashboard$/, () => viewDashboard()],
+    [/^#\/business$/, () => viewBusiness()],
     [/^#\/(sales|purchases|notes|receipts|payments|journals)$/, m => viewVoucherList(m[1])],
     [/^#\/new\/(SI|PB|CN|DN|RC|PY|JV|CT|SJ)$/, m => viewVoucherForm({ type: m[1] })],
     [/^#\/edit\/(.+)$/, m => viewVoucherForm(vById(m[1]))],
@@ -332,7 +333,7 @@ const ROUTES = [
     [/^#\/scan$/, () => viewScan()],
     [/^#\/reports$/, () => viewReports()],
     [/^#\/report\/([\w-]+)$/, m => viewReport(m[1])],
-    [/^#\/gst(?:\/(\w+))?$/, m => viewGst(m[1] || 'r1')],
+    [/^#\/gst(?:\/(\w+))?$/, m => viewGst(m[1] || 'plan')],
     [/^#\/tds$/, () => viewTds()],
     [/^#\/bank$/, () => viewBank()],
     [/^#\/calendar$/, () => viewCalendar()],
@@ -373,6 +374,7 @@ function renderChrome() {
         ['Overview'],
         ['#/dashboard', 'home', 'Dashboard'],
         ['#/companies', 'building', 'All companies'],
+        ['#/business', 'shield', 'Business profile'],
         ['Transactions'],
         ['#/sales', 'file', 'Sales', 'F8'],
         ['#/purchases', 'cart', 'Purchases', 'F9'],
@@ -488,7 +490,7 @@ function viewCompanies() {
         return out;
     }).join('');
     $('#view').innerHTML = pageHead('All companies', 'Your practice workspace: every company you look after, with its filing status. Open one to work in it.',
-        isAdmin() ? `<button class="btn btn-s" onclick="if (limitReached('companies')) return upgradePrompt('More companies'); createSampleCompany(); viewCompanies()">+ Sample company</button><button class="btn btn-p" onclick="if (limitReached('companies')) return upgradePrompt('More companies'); companyForm()">+ New company</button>` : '')
+        isAdmin() ? `<button class="btn btn-s" onclick="if (limitReached('companies')) return upgradePrompt('More companies'); createSampleWorkspace(); viewCompanies()">+ Sample companies</button><button class="btn btn-p" onclick="if (limitReached('companies')) return upgradePrompt('More companies'); companyForm()">+ New company</button>` : '')
         + (cards ? `<div class="grid g3">${cards}</div>` : `<div class="empty">No companies yet. ${isAdmin() ? 'Create your first company to begin.' : 'Ask the owner to give you access.'}</div>`);
 }
 function pickCompany(id) {
@@ -546,8 +548,8 @@ function companyForm(existing) {
                     meta.companies.push({ id: c.id, name: np.name, gstin: np.gstin });
                     saveCo(); saveMeta(); closeModal();
                     state.fy = defaultFy();
-                    toast('Company created. Add a bank account and opening balances in Chart of accounts.');
-                    go('#/dashboard');
+                    toast('Company created. Now tell the ERP about the business so it applies the right rates and rules.');
+                    go('#/business');
                 }
             };
         }
@@ -555,6 +557,12 @@ function companyForm(existing) {
 }
 
 // ---------- dashboard ----------
+function bizBanner() {
+    const b = co.profile.biz;
+    if (!b) return canEdit() ? `<div class="warns" style="display:flex;align-items:center;gap:12px;justify-content:space-between;flex-wrap:wrap"><span><b>Tell us about your business.</b> The ERP will apply the right GST rates, input credit rules, returns and tax rules for your industry and size.</span><a class="btn btn-p btn-sm" href="#/business">Set up business profile</a></div>` : '';
+    const must = businessRules(b).filter(r => r.level === 'must').length;
+    return `<div class="note" style="margin:-4px 0 12px"><a href="#/business">${esc(INDUSTRIES[b.industry]?.icon || '')} ${esc(INDUSTRIES[b.industry]?.name || '')}</a> · ${co.profile.gstType === 'composition' ? `composition ${co.profile.compRate}%` : 'regular GST'} · input credit ${{ full: 'claimed', none: 'not claimed', mixed: 'with Rule 42 reversal' }[co.profile.itcPolicy || 'full']} · ${must} rules apply</div>`;
+}
 function viewDashboard() {
     const t = todayISO(), ym = ymOf(t);
     const fy = state.fy, from = fyStart(fy) < co.profile.booksFrom ? co.profile.booksFrom : fyStart(fy), to = fyEnd(fy) < t ? fyEnd(fy) : t;
@@ -572,7 +580,7 @@ function viewDashboard() {
     const recent = [...co.vouchers].sort((a, b) => (b.created || '').localeCompare(a.created || '')).slice(0, 8);
     $('#view').innerHTML = pageHead(`Good ${new Date().getHours() < 12 ? 'morning' : new Date().getHours() < 17 ? 'afternoon' : 'evening'}, ${me.name.split(' ')[0]}`, `${esc(co.profile.name)} · FY ${fyLabel(fy)} · ${fmtDate(t)}`,
         canEdit() ? `<a class="btn btn-s adv" href="#/scan">${ic('cam')} Scan a bill</a><a class="btn btn-s" href="#/new/RC">Receipt <kbd>F6</kbd></a><a class="btn btn-s" href="#/new/PB">Bill <kbd>F9</kbd></a><a class="btn btn-p" href="#/new/SI">${ic('plus')} Invoice <kbd>F8</kbd></a>` : '')
-        + recBanner + `<div class="grid g4" style="margin-bottom:16px">
+        + recBanner + bizBanner() + `<div class="grid g4" style="margin-bottom:16px">
             ${kpi('To collect (receivables)', inr0(recv), overdue.length ? `${overdue.length} invoice(s) overdue` : 'Nothing overdue', '#0f9d63')}
             ${kpi('To pay (payables)', inr0(pay), `${co.contacts.filter(c => c.msme && -balance(c.id) > 0).length} MSME supplier(s) with dues`, '#c62828')}
             ${kpi('Cash & bank', inr0(cash), `${cashBankAccounts().length} account(s)`, '#0369a1')}

@@ -53,7 +53,8 @@ const SYS_ACCOUNTS = [
     ['discountAllowed', 'Discount Allowed', 'indexp'], ['misc', 'Miscellaneous Expenses', 'indexp'], ['otherIncome', 'Interest Received', 'indinc'],
     ['erPf', "Employer's Contribution to PF", 'empexp'], ['erEsi', "Employer's Contribution to ESI", 'empexp'],
     ['salPay', 'Salary Payable', 'curliab'], ['pfPay', 'PF Payable', 'duties'], ['esiPay', 'ESI Payable', 'duties'], ['ptPay', 'Professional Tax Payable', 'duties'],
-    ['tdsSalPay', 'TDS on Salary Payable', 'duties'], ['salAdv', 'Salary Advances to Staff', 'loansadv'], ['repairs', 'Repairs & Maintenance – Machinery', 'direxp']
+    ['tdsSalPay', 'TDS on Salary Payable', 'duties'], ['salAdv', 'Salary Advances to Staff', 'loansadv'], ['repairs', 'Repairs & Maintenance – Machinery', 'direxp'],
+    ['itcRev', 'Input Tax Credit Reversed (Rule 42)', 'indexp'], ['compTax', 'Composition Tax (GST)', 'indexp'], ['compPay', 'GST Payable – Composition', 'duties']
 ];
 
 const VTYPES = {
@@ -217,6 +218,8 @@ function upgradeCo(c) {
     c.vouchers.forEach(v => { if (v.tdsMonth && !v.taxMonth) { v.taxMonth = v.tdsMonth; delete v.tdsMonth; } });
     c.settings ||= { lockDate: '', prefixes: {} };
     SYS_ACCOUNTS.forEach(([sys, name, group]) => { if (!c.accounts.some(a => a.sys === sys)) c.accounts.push({ id: uid('acc'), sys, name, group, openDr: 0, openCr: 0 }); });
+    // The sample trading company is never connected to STAY BAY / Eco Pack; they have their own companies
+    if ((c.profile.sample || c.audit.some(a => a.action === 'Sample data loaded')) && Object.keys(c.links).length) c.links = {};
     return c;
 }
 
@@ -309,13 +312,18 @@ function computeVoucher(v) {
     // An unregistered supplier cannot charge GST; only notified reverse-charge supplies carry tax (paid by us).
     const composition = co.profile.gstType === 'composition';
     const noTax = (purchaseSide && !isRegistered(party) && !v.rcm) || (!purchaseSide && composition);
-    if (purchaseSide && composition) v.itc = false;
+    // Composition dealers and businesses whose supplies carry no input credit (e.g. hotel rooms up to ₹7,500, restaurants)
+    if (purchaseSide && (composition || (co.profile.itcPolicy === 'none' && v.date >= (co.profile.itcPolicyFrom || '')))) v.itc = false;
     const t = { taxable: 0, cgst: 0, sgst: 0, igst: 0, cess: 0, qty: 0 };
     (v.lines || []).forEach(l => {
         const gross = r2((Number(l.qty) || 0) * (Number(l.rate) || 0));
         l.discAmt = r2(gross * (Number(l.disc) || 0) / 100);
         l.taxable = r2(gross - l.discAmt);
-        const rate = noTax || (zeroRated && !withPay) ? 0 : Number(l.gstRate) || 0;
+        // Food-app orders (the app pays GST, s.9(5)) and services where the customer pays under reverse charge carry no tax on our bill
+        const it = !purchaseSide && itemById(l.itemId);
+        l.eco95 = Boolean(it?.eco95) || undefined;
+        l.rcmOut = Boolean(it?.rcmOut && isRegistered(party)) || undefined;
+        const rate = noTax || (zeroRated && !withPay) || l.eco95 || l.rcmOut ? 0 : Number(l.gstRate) || 0;
         l.cgst = l.sgst = l.igst = 0;
         if (inter) l.igst = r2(l.taxable * rate / 100);
         else { l.cgst = r2(l.taxable * rate / 200); l.sgst = l.cgst; }
